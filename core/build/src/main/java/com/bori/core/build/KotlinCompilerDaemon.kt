@@ -8,6 +8,8 @@ import java.io.File
 import java.io.PrintStream
 import java.util.zip.ZipFile
 import javax.inject.Inject
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
 import javax.inject.Singleton
 
 /**
@@ -55,6 +57,9 @@ class KotlinCompilerDaemon @Inject constructor() {
     private var cachedInstance: CompilerInstance? = null
     private var cachedLoaderPath: String? = null
     private var cachedPluginsDir: File? = null
+    // The compiler class loader whose application environment already has compiler.xml's
+    // extension points (see prepareApplicationEnvironment).
+    private var preparedLoader: ClassLoader? = null
 
     // Hidden API bypass methods (cached globally)
     private var vmRuntime: Any? = null
@@ -88,6 +93,64 @@ class KotlinCompilerDaemon @Inject constructor() {
         cachedInstance = null
         cachedLoaderPath = null
         cachedPluginsDir = null
+        preparedLoader = null
+    }
+
+    /**
+     * Creates the compiler's IntelliJ application environment, keeps it alive, and registers the
+     * application extension points declared in compiler.xml.
+     *
+     * copyBuildTools patches out PluginManagerCore.registerExtensionPointAndExtensions (it needs
+     * StAX, which Android lacks), so those points never get registered. Without them the compiler
+     * crashes on the first error or warning it reports ("Missing extension point:
+     * org.jetbrains.kotlin.diagnosticSuppressor"), and the user never sees the real message.
+     * The environment is kept alive (kotlin.environment.keepalive), so each compile on this class
+     * loader reuses it, extension points included.
+     */
+    private fun prepareApplicationEnvironment(inst: CompilerInstance, tools: ToolsManager) {
+        if (preparedLoader === inst.loader) return
+        val l = inst.loader
+        System.setProperty("kotlin.environment.keepalive", "true")
+        val pluginsDir = extractPluginsDir(tools)
+
+        val configClass = l.loadClass("org.jetbrains.kotlin.config.CompilerConfiguration")
+        val config = configClass.getDeclaredConstructor().newInstance()
+        val pluginRootKey = l.loadClass("org.jetbrains.kotlin.cli.common.CLIConfigurationKeys")
+            .getField("INTELLIJ_PLUGIN_ROOT").get(null)
+        configClass.getMethod("put", l.loadClass("org.jetbrains.kotlin.config.CompilerConfigurationKey"), Any::class.java)
+            .invoke(config, pluginRootKey, pluginsDir.absolutePath)
+        val disposable = l.loadClass("org.jetbrains.kotlin.com.intellij.openapi.util.Disposer")
+            .getMethod("newDisposable").invoke(null)
+        val envCompanion = l.loadClass("org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment")
+            .getField("Companion").get(null)
+        envCompanion.javaClass.getMethod(
+            "getOrCreateApplicationEnvironmentForProduction",
+            l.loadClass("org.jetbrains.kotlin.com.intellij.openapi.Disposable"),
+            configClass,
+        ).invoke(envCompanion, disposable, config)
+
+        val app = l.loadClass("org.jetbrains.kotlin.com.intellij.openapi.application.ApplicationManager")
+            .getMethod("getApplication").invoke(null)
+        val area = app.javaClass.getMethod("getExtensionArea").invoke(app)
+        val kindClass = l.loadClass("org.jetbrains.kotlin.com.intellij.openapi.extensions.ExtensionPoint\$Kind")
+        val interfaceKind = kindClass.getField("INTERFACE").get(null)
+        val hasPoint = area.javaClass.getMethod("hasExtensionPoint", String::class.java)
+        val register = area.javaClass.getMethod("registerExtensionPoint", String::class.java, String::class.java, kindClass)
+
+        val xml = File(pluginsDir, "META-INF/extensions/compiler.xml")
+        val points = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xml)
+            .getElementsByTagName("extensionPoint")
+        var added = 0
+        for (i in 0 until points.length) {
+            val el = points.item(i) as Element
+            val name = el.getAttribute("qualifiedName")
+            val iface = el.getAttribute("interface")
+            if (name.isEmpty() || iface.isEmpty() || hasPoint.invoke(area, name) as Boolean) continue
+            register.invoke(area, name, iface, interfaceKind)
+            added++
+        }
+        Log.d(TAG, "Application environment ready: registered $added extension point(s) from compiler.xml")
+        preparedLoader = inst.loader
     }
 
     /**
@@ -204,6 +267,7 @@ class KotlinCompilerDaemon @Inject constructor() {
         Thread.currentThread().contextClassLoader = inst.loader
         
         return try {
+            prepareApplicationEnvironment(inst, tools)
             Log.d(TAG, "Executing compilation via CLI exec (reflection)")
             val exitCode = inst.execMethod.invoke(inst.instance, out, args)
             exitCode!!.javaClass.getMethod("name").invoke(exitCode) as String
@@ -329,6 +393,7 @@ class KotlinCompilerDaemon @Inject constructor() {
         val oldLoader = Thread.currentThread().contextClassLoader
         Thread.currentThread().contextClassLoader = inst.loader
         return try {
+            prepareApplicationEnvironment(inst, tools)
             val argsObj = api.argsClass.getDeclaredConstructor().newInstance()
             api.parseArgumentsMethod.invoke(inst.instance, argsNoFiles, argsObj)
 

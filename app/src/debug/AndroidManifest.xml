@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Only the shell (adb) holds DUMP, so no app can start builds through this. -->
+        <receiver
+            android:name="com.bori.app.debug.DebugBuildReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.bori.app.debug.BUILD" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
