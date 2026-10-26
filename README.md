@@ -14,6 +14,19 @@ runs locally, and an AI agent can scaffold and modify your project for you.
 - **Stack:** Kotlin · Jetpack Compose · Hilt · Room · DataStore · OkHttp
 - **License:** [Apache-2.0](LICENSE). Third-party notices are in [`NOTICE`](NOTICE).
 
+
+## Screenshots
+| | |
+|---|---|
+| ![Chat beside the Linux terminal](docs/screenshots/unfolded-chat-terminal.png) | ![Claude Code with the split keyboard](docs/screenshots/claude-code-split-keys.png) |
+| ![Chat beside the code editor](docs/screenshots/unfolded-chat-editor.png) | ![An on-device build](docs/screenshots/build-success.png) |
+
+| | | | |
+|---|---|---|---|
+| ![Terminal suggestions](docs/screenshots/cover-terminal-suggestions.png) | ![F-keys layer](docs/screenshots/cover-terminal-fkeys.png) | ![Linux environment](docs/screenshots/linux-environment.png) | ![AI providers](docs/screenshots/cover-providers.png) |
+
+**Download:** the full build (with Linux) is on [GitHub Releases](https://github.com/Atom0131/Bori-Code/releases).
+
 ---
 
 ## What it does
