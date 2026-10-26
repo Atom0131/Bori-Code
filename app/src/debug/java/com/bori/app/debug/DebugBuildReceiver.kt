@@ -7,6 +7,7 @@ import com.bori.app.data.build.KeystoreRepository
 import com.bori.core.build.BuildEngine
 import com.bori.core.build.model.BuildEvent
 import com.bori.core.build.model.BuildVariant
+import com.bori.core.build.model.KeystoreConfig
 import com.bori.core.project.ProjectRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -20,7 +21,7 @@ import javax.inject.Inject
  * Starts a build from adb, for testing the on-device builder (debug builds only):
  *
  *     adb shell am broadcast -a com.bori.app.debug.BUILD -n <app id>/com.bori.app.debug.DebugBuildReceiver \
- *         --es project t1-kotlin-views [--ez release true]
+ *         --es project t1-kotlin-views [--ez release true] [--es ks <keystore> --es alias <alias> --es pass <password>]
  *
  * The log goes to `<external files>/build-out/<project>.log`, ending with `RESULT OK <apk>` or
  * `RESULT FAIL <message>`, and the APK is copied next to it as `<project>.apk`.
@@ -38,7 +39,10 @@ class DebugBuildReceiver : BroadcastReceiver() {
         val log = File(outDir, "$name.log").also { it.writeText("") }
         scope.launch {
             val project = projectRepository.upsertFromPath(File(ProjectRepository.PROJECTS_ROOT, name).absolutePath)
-            val keystore = if (variant == BuildVariant.RELEASE) keystoreRepository.get() else null
+            val keystore = intent.getStringExtra("ks")?.let { ks ->
+                val pass = intent.getStringExtra("pass").orEmpty()
+                KeystoreConfig(ks, intent.getStringExtra("alias").orEmpty(), pass, pass)
+            } ?: if (variant == BuildVariant.RELEASE) keystoreRepository.get() else null
             buildEngine.build(project, keystoreConfig = keystore, variant = variant).collect { event ->
                 when (event) {
                     is BuildEvent.Log -> log.appendText(event.message + "\n")

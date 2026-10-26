@@ -5,21 +5,54 @@ import java.io.File
 object VersionCatalogParser {
 
     /**
+     * A parsed `gradle/libs.versions.toml`. Keys are normalised aliases (see [normalise]):
+     * [libraries] maps alias → "group:artifact:version", [bundles] maps bundle alias → its
+     * coordinates, and [versions] maps version alias → version.
+     */
+    data class Catalog(
+        val libraries: Map<String, String>,
+        val bundles: Map<String, List<String>>,
+        val versions: Map<String, String>,
+    ) {
+        /** Coordinates for a `libs.X` reference (X without "libs."): one library, or every member of `bundles.X`. */
+        fun resolve(ref: String): List<String> {
+            val key = normalise(ref)
+            if (key.startsWith("bundles.")) return bundles[key.removePrefix("bundles.")].orEmpty()
+            return listOfNotNull(libraries[key])
+        }
+
+        /** The version for a `libs.versions.X` reference (X without "libs.versions."). */
+        fun version(ref: String): String? = versions[normalise(ref)]
+
+        companion object {
+            val EMPTY = Catalog(emptyMap(), emptyMap(), emptyMap())
+        }
+    }
+
+    fun parseCatalog(tomlFile: File): Catalog {
+        if (!tomlFile.exists()) return Catalog.EMPTY
+        val text = tomlFile.readText()
+        val versions = parseVersions(text)
+        val libraries = parseLibraries(text, versions)
+        return Catalog(libraries, parseBundles(text, libraries), versions)
+    }
+
+    /**
      * Parses `gradle/libs.versions.toml` and returns a map of alias → "group:artifact:version".
      * Handles both:
      *   - Inline: `retrofit = "com.squareup.retrofit2:retrofit:2.11.0"`
      *   - Rich:   `retrofit = { group = "...", name = "retrofit", version.ref = "retrofit" }`
-     * Alias keys are normalised: `-` and `.` in TOML become `.` for `libs.X` lookup.
+     *             or `{ module = "group:name", version = "..." }`
+     * Bundle members are also listed as "bundlealias.memberalias".
      */
     fun parse(tomlFile: File): Map<String, String> {
-        if (!tomlFile.exists()) return emptyMap()
-        val text = tomlFile.readText()
-
-        val versions = parseVersions(text)
-        val libraries = parseLibraries(text, versions)
-        val bundles = parseBundles(text, libraries)
-
-        return libraries + bundles
+        val catalog = parseCatalog(tomlFile)
+        val bundleMembers = catalog.bundles.flatMap { (bundle, coords) ->
+            coords.mapNotNull { coord ->
+                catalog.libraries.entries.firstOrNull { it.value == coord }?.let { "$bundle.${it.key}" to coord }
+            }
+        }
+        return catalog.libraries + bundleMembers
     }
 
     // ── Section extraction ─────────────────────────────────────────────────
@@ -52,28 +85,27 @@ object VersionCatalogParser {
     }
 
     private fun parseRichLibrary(value: String, versions: Map<String, String>): String? {
-        val group = Regex("""group\s*=\s*["']([^"']+)["']""").find(value)?.groupValues?.get(1) ?: return null
-        val name = Regex("""name\s*=\s*["']([^"']+)["']""").find(value)?.groupValues?.get(1) ?: return null
+        val module = Regex("""module\s*=\s*["']([^"':]+):([^"']+)["']""").find(value)
+        val group = module?.groupValues?.get(1)
+            ?: Regex("""group\s*=\s*["']([^"']+)["']""").find(value)?.groupValues?.get(1) ?: return null
+        val name = module?.groupValues?.get(2)
+            ?: Regex("""name\s*=\s*["']([^"']+)["']""").find(value)?.groupValues?.get(1) ?: return null
         val inlineVersion = Regex("""version\s*=\s*["']([^"']+)["']""").find(value)?.groupValues?.get(1)
+            ?: Regex("""(?:strictly|require|prefer)\s*=\s*["']([^"']+)["']""").find(value)?.groupValues?.get(1)
         val versionRef = Regex("""version\.ref\s*=\s*["']([^"']+)["']""").find(value)?.groupValues?.get(1)
         val version = inlineVersion ?: versions[versionRef?.let { normalise(it) }] ?: return null
         return "$group:$name:$version"
     }
 
-    private fun parseBundles(text: String, libraries: Map<String, String>): Map<String, String> {
-        // Bundles are alias lists — flatten each bundle alias into the individual library coords.
-        // We treat them the same as individual libs: a bundle alias resolves to its first member.
-        // This is unusual; mostly users reference individual lib aliases, not bundles.
-        // For safety we just re-export each member alias from the bundle under the bundle name too.
+    private fun parseBundles(text: String, libraries: Map<String, String>): Map<String, List<String>> {
         val section = extractSection(text, "bundles") ?: return emptyMap()
-        val result = mutableMapOf<String, String>()
+        val result = mutableMapOf<String, List<String>>()
         for (line in section.lines()) {
             val (key, value) = parseKV(line) ?: continue
             // value is `["alias1", "alias2", ...]`
-            Regex("""["']([^"']+)["']""").findAll(value).forEach { m ->
-                val alias = normalise(m.groupValues[1])
-                libraries[alias]?.let { result[normalise(key) + "." + alias] = it }
-            }
+            result[normalise(key)] = Regex("""["']([^"']+)["']""").findAll(value)
+                .mapNotNull { libraries[normalise(it.groupValues[1])] }
+                .toList()
         }
         return result
     }
@@ -93,13 +125,16 @@ object VersionCatalogParser {
         val trimmed = line.trim()
         if (trimmed.isBlank() || trimmed.startsWith("#")) return null
         val eqIdx = trimmed.indexOf('=').takeIf { it > 0 } ?: return null
-        val key = trimmed.substring(0, eqIdx).trim()
+        val key = trimmed.substring(0, eqIdx).trim().trim('"')
         val value = trimmed.substring(eqIdx + 1).trim()
         return key to value
     }
 
-    /** Normalise TOML alias: replace `-` with `.` and lowercase for consistent lookup. */
-    private fun normalise(alias: String): String = alias.replace('-', '.').lowercase()
+    /**
+     * Normalise an alias the way Gradle's generated accessors do: `-`, `_` and `.` separate
+     * words (`androidx-core` and `androidx_core` are both `libs.androidx.core`), case-insensitive.
+     */
+    private fun normalise(alias: String): String = alias.replace('-', '.').replace('_', '.').lowercase()
 
     /**
      * Given a `libs.someAlias` reference from a build file, look up the coordinate

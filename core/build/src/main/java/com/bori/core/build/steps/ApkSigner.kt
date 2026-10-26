@@ -1,4 +1,4 @@
-﻿package com.bori.core.build.steps
+package com.bori.core.build.steps
 
 import android.content.Context
 import com.bori.core.build.model.BuildVariant
@@ -69,16 +69,17 @@ class ApkSigner @Inject constructor(
     private fun loadCustomKeyPair(config: KeystoreConfig): Pair<PrivateKey, X509Certificate> {
         val file = File(config.keystorePath)
         require(file.exists()) { "Keystore not found: ${config.keystorePath}" }
+        val bytes = file.readBytes()
         val ksPassword = config.keystorePassword.toCharArray()
         val keyPassword = config.keyPassword.toCharArray()
-        val format = when (file.extension.lowercase()) {
-            "p12", "pfx" -> "PKCS12"
-            "jks" -> "JKS"
-            else -> "BKS"
+        if (JksReader.isJks(bytes)) {
+            val entry = JksReader.read(bytes, ksPassword)[config.keyAlias]
+            val protectedKey = entry?.protectedKey ?: throw IllegalArgumentException("No key named \"${config.keyAlias}\" in the keystore")
+            return JksReader.decryptKey(protectedKey, keyPassword) to entry.chain.first()
         }
-        val ks = KeyStore.getInstance(format, if (format == "BKS") "BC" else KeyStore.getDefaultType())
-        file.inputStream().use { ks.load(it, ksPassword) }
-        val privateKey = ks.getKey(config.keyAlias, keyPassword) as PrivateKey
+        val ks = loadKeyStore(bytes, ksPassword)
+        val privateKey = ks.getKey(config.keyAlias, keyPassword) as? PrivateKey
+            ?: throw IllegalArgumentException("No key named \"${config.keyAlias}\" in the keystore")
         val cert = ks.getCertificate(config.keyAlias) as X509Certificate
         return privateKey to cert
     }
@@ -87,15 +88,29 @@ class ApkSigner @Inject constructor(
     fun listAliases(config: KeystoreConfig): List<String> {
         val file = File(config.keystorePath)
         require(file.exists()) { "Keystore not found: ${config.keystorePath}" }
+        val bytes = file.readBytes()
         val ksPassword = config.keystorePassword.toCharArray()
-        val format = when (file.extension.lowercase()) {
-            "p12", "pfx" -> "PKCS12"
-            "jks" -> "JKS"
-            else -> "BKS"
+        if (JksReader.isJks(bytes)) return JksReader.read(bytes, ksPassword).filterValues { it.protectedKey != null }.keys.toList()
+        return loadKeyStore(bytes, ksPassword).aliases().toList()
+    }
+
+    /**
+     * Opens a PKCS12 or Bouncy Castle (BKS) keystore, whatever its file extension says: keytool
+     * has written PKCS12 by default since Java 9, even into files named .jks. JKS itself goes
+     * through [JksReader].
+     */
+    private fun loadKeyStore(bytes: ByteArray, password: CharArray): KeyStore {
+        var failure: Exception? = null
+        for (type in listOf("PKCS12", "BKS")) {
+            try {
+                val ks = if (type == "BKS") KeyStore.getInstance(type, "BC") else KeyStore.getInstance(type)
+                ks.load(bytes.inputStream(), password)
+                return ks
+            } catch (e: Exception) {
+                failure = failure ?: e
+            }
         }
-        val ks = KeyStore.getInstance(format, if (format == "BKS") "BC" else KeyStore.getDefaultType())
-        file.inputStream().use { ks.load(it, ksPassword) }
-        return ks.aliases().toList()
+        throw IllegalArgumentException("Couldn't open the keystore (wrong password, or not a PKCS12, JKS or BKS file): ${failure?.message}", failure)
     }
 
     fun sign(

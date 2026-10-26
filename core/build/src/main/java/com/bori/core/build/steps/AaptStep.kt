@@ -1,4 +1,4 @@
-﻿package com.bori.core.build.steps
+package com.bori.core.build.steps
 
 import com.bori.core.build.tools.ToolsManager
 import java.io.BufferedReader
@@ -33,35 +33,40 @@ class AaptStep(private val tools: ToolsManager) {
     }
 
     /**
-     * Links user compiled resources + pre-compiled library flat files into an APK shell and
-     * generates R.java for the app package and each library namespace package.
+     * Links compiled resources into an APK shell and generates R.java for the app package and
+     * each library package. [flatDirs] go lowest priority first (bundled libraries, then
+     * dependencies, library modules, the app), and each is an overlay, so a resource in a later
+     * directory overrides the same one in an earlier directory, as Gradle's resource merge does.
+     *
+     * [renameManifestPackage] sets the installed package (applicationId) when it differs from the
+     * manifest's package (the namespace, which R keeps); AAPT2 makes the component class names
+     * absolute first. [proguardRulesOut] gets keep rules for the classes the manifest and layouts use.
      */
     fun link(
         manifestFile: File,
-        compiledResDir: File,
-        libraryResFlatDirs: List<File> = emptyList(),
+        flatDirs: List<File>,
         rJavaDir: File,
         apkOut: File,
         emit: (String) -> Unit,
         minSdk: Int = 21,
         targetSdk: Int = 35,
         extraPackages: List<String> = emptyList(),
+        versionCode: Int? = null,
+        versionName: String? = null,
+        renameManifestPackage: String? = null,
+        proguardRulesOut: File? = null,
     ) {
-        val userFlatFiles = compiledResDir.walkTopDown()
-            .filter { it.isFile && it.extension == "flat" }
-            .map { it.absolutePath }
-            .toList()
-
-        val libFlatFiles = libraryResFlatDirs
+        val flatFiles = flatDirs
             .filter { it.exists() }
             .flatMap { dir ->
                 dir.walkTopDown()
                     .filter { it.isFile && it.extension == "flat" }
                     .map { it.absolutePath }
+                    .sorted()
                     .toList()
             }
 
-        emit("AAPT2 link: ${userFlatFiles.size} user flat(s) + ${libFlatFiles.size} library flat(s) → ${apkOut.name}")
+        emit("AAPT2 link: ${flatFiles.size} compiled resource(s) from ${flatDirs.size} source(s) → ${apkOut.name}")
 
         val args = buildList {
             add(tools.aapt2.absolutePath)
@@ -70,19 +75,21 @@ class AaptStep(private val tools: ToolsManager) {
             add("--manifest"); add(manifestFile.absolutePath)
             add("--min-sdk-version"); add(minSdk.toString())
             add("--target-sdk-version"); add(targetSdk.toString())
+            versionCode?.let { add("--version-code"); add(it.toString()) }
+            versionName?.let { add("--version-name"); add(it) }
+            if (versionCode != null || versionName != null) add("--replace-version")
+            renameManifestPackage?.let { add("--rename-manifest-package"); add(it) }
             add("--auto-add-overlay")
-            // User flat files first (higher priority — app resources override library resources)
-            userFlatFiles.forEach { add(it) }
-            // Library flat files after
-            libFlatFiles.forEach { add(it) }
+            flatFiles.forEach { add("-R"); add(it) }
             add("-o"); add(apkOut.absolutePath)
             add("--java"); add(rJavaDir.absolutePath)
+            proguardRulesOut?.let { add("--proguard"); add(it.absolutePath) }
             if (extraPackages.isNotEmpty()) {
                 add("--extra-packages"); add(extraPackages.joinToString(":"))
             }
         }
         // Increased timeout: library resources add significant link work
-        runProcess(args, emit, timeoutSeconds = 60L)
+        runProcess(args, emit, timeoutSeconds = 120L)
     }
 
     private fun runProcess(args: List<String>, emit: (String) -> Unit, timeoutSeconds: Long) {

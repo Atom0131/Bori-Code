@@ -1,0 +1,2 @@
+rootProject.name = 't5-multi-module'
+include ':app', ':core'

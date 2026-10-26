@@ -1,4 +1,4 @@
-﻿package com.bori.app.ui.build
+package com.bori.app.ui.build
 
 import android.content.Context
 import android.content.Intent
@@ -126,9 +126,10 @@ class BuildViewModel @Inject constructor(
                             allMessages += event.message
                         }
                         is BuildEvent.Success -> {
-                            _uiState.value = UiState.Done(event.apkPath, project.packageName)
-                            refreshInstallState(project.packageName)
-                            buildStateHolder.onSuccess(event.apkPath)
+                            val packageName = event.applicationId ?: project.packageName
+                            _uiState.value = UiState.Done(event.apkPath, packageName)
+                            refreshInstallState(packageName)
+                            buildStateHolder.onSuccess(event.apkPath, event.applicationId)
                             diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
                         }
                         is BuildEvent.Failure -> {

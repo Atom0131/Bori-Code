@@ -29,6 +29,7 @@ class PluginDexer(private val tools: ToolsManager) {
     fun dex(pluginJar: File, outDexJar: File, emit: (String) -> Unit): File {
         if (outDexJar.exists() && outDexJar.length() > 0L) {
             emit("Plugin DEX cached: ${outDexJar.name}")
+            outDexJar.setReadOnly() // caches from before this was required
             return outDexJar
         }
         outDexJar.parentFile?.mkdirs()
@@ -64,6 +65,8 @@ class PluginDexer(private val tools: ToolsManager) {
             executor.shutdownNow()
         }
 
+        // Android 14+ only loads dex files that the app can't write to.
+        outDexJar.setReadOnly()
         emit("D8: plugin DEX ready → ${outDexJar.name} (${outDexJar.length() / 1024} KB)")
         return outDexJar
     }

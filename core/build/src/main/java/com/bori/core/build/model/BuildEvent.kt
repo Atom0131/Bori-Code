@@ -1,4 +1,4 @@
-﻿package com.bori.core.build.model
+package com.bori.core.build.model
 
 sealed class BuildEvent {
     data object Started : BuildEvent()
@@ -10,7 +10,8 @@ sealed class BuildEvent {
         enum class Level { INFO, WARN, ERROR }
     }
 
-    data class Success(val apkPath: String) : BuildEvent()
+    /** [applicationId] is the built app's installed package name (null from older callers). */
+    data class Success(val apkPath: String, val applicationId: String? = null) : BuildEvent()
 
     data class Failure(val error: String) : BuildEvent()
 }

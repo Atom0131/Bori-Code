@@ -1,4 +1,4 @@
-﻿package com.bori.app.data.build
+package com.bori.app.data.build
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +22,8 @@ class BuildStateHolder @Inject constructor() {
         val status: String = "none",  // none | building | success | failed
         val apkPath: String? = null,
         val error: String? = null,
+        /** The built app's package name (its applicationId, which can differ from the namespace). */
+        val applicationId: String? = null,
     )
 
     private val _lastBuild = MutableStateFlow(LastBuild())
@@ -35,8 +37,8 @@ class BuildStateHolder @Inject constructor() {
         _lastBuild.update { it.copy(logs = it.logs + msg) }
     }
 
-    fun onSuccess(apkPath: String) {
-        _lastBuild.update { it.copy(status = "success", apkPath = apkPath) }
+    fun onSuccess(apkPath: String, applicationId: String? = null) {
+        _lastBuild.update { it.copy(status = "success", apkPath = apkPath, applicationId = applicationId) }
     }
 
     fun onFailure(error: String) {

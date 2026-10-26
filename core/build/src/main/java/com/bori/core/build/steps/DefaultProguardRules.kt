@@ -1,4 +1,4 @@
-﻿package com.bori.core.build.steps
+package com.bori.core.build.steps
 
 internal object DefaultProguardRules {
 
@@ -42,6 +42,18 @@ internal object DefaultProguardRules {
         -keepclasseswithmembernames class * {
             native <methods>;
         }
+
+        # ── Missing classes ───────────────────────────────────────────────────
+        # Compile-time annotations and optional dependencies that libraries reference but
+        # apps don't ship. AGP makes you list these; on the phone a release build would just
+        # fail, so warnings about missing classes are ignored.
+        -dontwarn org.jetbrains.annotations.**
+        -dontwarn javax.annotation.**
+        -dontwarn org.conscrypt.**
+        -dontwarn org.bouncycastle.**
+        -dontwarn org.openjsse.**
+        -dontwarn kotlin.**
+        -ignorewarnings
 
         # ── Annotations + debug info ──────────────────────────────────────────
         -keepattributes *Annotation*

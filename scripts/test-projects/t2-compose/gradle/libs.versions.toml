@@ -1,0 +1,13 @@
+[versions]
+compose = "1.4.3"
+material3 = "1.1.1"
+activityCompose = "1.7.2"
+
+[libraries]
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+compose-ui = { group = "androidx.compose.ui", name = "ui", version.ref = "compose" }
+compose-foundation = { group = "androidx.compose.foundation", name = "foundation", version.ref = "compose" }
+compose_material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
+
+[bundles]
+compose = ["compose-ui", "compose-foundation", "compose_material3"]

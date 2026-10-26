@@ -1,4 +1,4 @@
-﻿package com.bori.app.tools
+package com.bori.app.tools
 
 import android.content.Context
 import android.content.Intent
@@ -308,7 +308,7 @@ class ToolExecutor @Inject constructor(
         ).collect { event ->
             when (event) {
                 is BuildEvent.Log     -> { allLogs += event.message; buildStateHolder.onLog(event.message) }
-                is BuildEvent.Success -> { status = "success"; apkPath = event.apkPath; buildStateHolder.onSuccess(event.apkPath) }
+                is BuildEvent.Success -> { status = "success"; apkPath = event.apkPath; buildStateHolder.onSuccess(event.apkPath, event.applicationId) }
                 is BuildEvent.Failure -> { errorMsg = event.error; buildStateHolder.onFailure(event.error) }
                 BuildEvent.Started    -> Unit
             }
@@ -341,7 +341,8 @@ class ToolExecutor @Inject constructor(
 
     private fun launchApp(args: JSONObject): ToolExecutionResult {
         val packageName = args.optString("package_name").ifBlank {
-            projectStateHolder.activeProject.value?.packageName
+            buildStateHolder.lastBuild.value.applicationId
+                ?: projectStateHolder.activeProject.value?.packageName
                 ?: return ToolExecutionResult("No active project and no package_name provided.", isError = true)
         }
         val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
