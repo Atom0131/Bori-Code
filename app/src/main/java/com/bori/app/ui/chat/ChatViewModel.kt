@@ -13,6 +13,8 @@ import com.bori.app.data.prefs.UserPreferencesRepository
 import com.bori.app.data.project.ProjectStateHolder
 import com.bori.app.service.ChatForegroundService
 import com.bori.core.project.ProjectRepository
+import com.bori.core.project.agent.AgentFiles
+import com.bori.core.project.agent.AgentLock
 import com.bori.core.project.model.Project
 import com.bori.core.project.model.ProjectTemplate
 import com.bori.app.tools.ToolDefinitions
@@ -95,6 +97,7 @@ enum class ModeType { PLAN, ASK }
 
 /** Queued mode-entry request — shown as a confirmation dialog before activating the mode. */
 data class PendingModeEntry(val mode: ModeType, val pendingText: String = "")
+data class PendingLockOverride(val lock: AgentLock, val text: String)
 
 /** An item attached to the next message — image, document, or project context. */
 sealed class Attachment {
@@ -199,6 +202,7 @@ class ChatViewModel @Inject constructor(
 
     private fun setLoading(loading: Boolean) {
         _isLoading.value = loading
+        if (!loading) releaseAgentLock()
         if (loading) {
             val intent = Intent(context, ChatForegroundService::class.java)
             context.startForegroundService(intent)
@@ -346,6 +350,51 @@ class ChatViewModel @Inject constructor(
     fun rejectPlan() {
         _pendingPlan.value = null
         // _isPlanMode stays true so user can refine and re-send
+    }
+
+    /** Another agent (Claude Code, Antigravity) holding this project's .bori/agent.lock; drives the banners. */
+    private val _otherAgentLock = MutableStateFlow<AgentLock?>(null)
+    val otherAgentLock: StateFlow<AgentLock?> = _otherAgentLock.asStateFlow()
+
+    /** A message held back because another agent holds the lock; the user picks Run anyway or Cancel. */
+    private val _pendingLockOverride = MutableStateFlow<PendingLockOverride?>(null)
+    val pendingLockOverride: StateFlow<PendingLockOverride?> = _pendingLockOverride.asStateFlow()
+
+    /** The project whose lock the built-in agent holds during a turn, so it's released on the same one. */
+    private var heldLockRoot: File? = null
+    private var currentTask = ""
+
+    private fun activeRoot(): File? = activeProject.value?.rootPath?.takeIf { it.isNotBlank() }?.let { File(it) }
+
+    /** Re-reads the lock; the chat and editor screens call this every few seconds while shown. */
+    fun refreshAgentLock() {
+        val root = activeRoot()
+        viewModelScope.launch(Dispatchers.IO) {
+            _otherAgentLock.value = root?.let { AgentFiles.otherAgentLock(it) }
+        }
+    }
+
+    fun confirmLockOverride() {
+        val pending = _pendingLockOverride.value ?: return
+        _pendingLockOverride.value = null
+        sendMessage(pending.text, skipModeDetection = true, ignoreAgentLock = true)
+    }
+
+    fun cancelLockOverride() {
+        _pendingLockOverride.value = null
+    }
+
+    private suspend fun acquireAgentLock() {
+        if (heldLockRoot != null) return
+        val root = activeRoot() ?: return
+        withContext(Dispatchers.IO) { AgentFiles.acquire(root, AgentFiles.BUILT_IN_AGENT, currentTask) }
+        heldLockRoot = root
+    }
+
+    private fun releaseAgentLock() {
+        val root = heldLockRoot ?: return
+        heldLockRoot = null
+        viewModelScope.launch(Dispatchers.IO) { AgentFiles.release(root, AgentFiles.BUILT_IN_AGENT) }
     }
 
     private fun requestModeEntry(mode: ModeType, pendingText: String = "") {
@@ -748,7 +797,7 @@ class ChatViewModel @Inject constructor(
         _pendingModeEntry.value = null
     }
 
-    fun sendMessage(userText: String, skipModeDetection: Boolean = false) {
+    fun sendMessage(userText: String, skipModeDetection: Boolean = false, ignoreAgentLock: Boolean = false) {
         // Re-enter Plan Mode if a session-persistent plan was temporarily exited for the last build.
         if (_rearmPlanModeNextSend.value) {
             _rearmPlanModeNextSend.value = false
@@ -812,6 +861,16 @@ class ChatViewModel @Inject constructor(
             }
         }
         currentAgentJob = viewModelScope.launch {
+            // Another agent is working on this project: ask before the built-in agent edits too.
+            if (!ignoreAgentLock && !userPrefs.value.chatProvider.isCli) {
+                val lock = activeRoot()?.let { withContext(Dispatchers.IO) { AgentFiles.otherAgentLock(it) } }
+                if (lock != null) {
+                    _otherAgentLock.value = lock
+                    _pendingLockOverride.value = PendingLockOverride(lock, text)
+                    return@launch
+                }
+            }
+            currentTask = text.take(80)
             if (activeSessionId == -1L) {
                 activeSessionId = sessionDao.insertSession(ChatSessionEntity(title = text.take(40)))
             }
@@ -1065,9 +1124,13 @@ class ChatViewModel @Inject constructor(
         extraFiles: List<Pair<String, String>> = emptyList(),
     ) {
         setLoading(true)
+        acquireAgentLock()
         val repoMap = projectStateHolder.activeProject.value?.rootPath?.let { path ->
             withContext(Dispatchers.IO) { RepoMapper.generate(path) }.ifBlank { null }
         }
+        val (sharedPlan, lastHandoff) = activeRoot()
+            ?.let { root -> withContext(Dispatchers.IO) { AgentFiles.readPlan(root) to AgentFiles.readHandoff(root) } }
+            ?: (null to null)
         val symbolSummary = buildSymbolSummary(_currentFileSymbols.value)
         val projectLanguage = projectStateHolder.activeProject.value?.template?.name
             ?.let { if (it.endsWith("_KOTLIN")) "Kotlin" else "Java" }
@@ -1085,6 +1148,8 @@ class ChatViewModel @Inject constructor(
             provider = prefs.chatProvider,
             model    = prefs.chatModel,
             projectLanguage = projectLanguage,
+            sharedPlan = sharedPlan,
+            lastHandoff = lastHandoff,
         )
         val request = contextManager.buildChatRequest(
             userMessage = "",

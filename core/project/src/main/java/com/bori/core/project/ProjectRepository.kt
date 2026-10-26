@@ -64,6 +64,7 @@ class ProjectRepository @Inject constructor(
         val created = toInsert.copy(id = id)
         try {
             ProjectScaffold.scaffold(created)
+            com.bori.core.project.agent.AgentFiles.writePlanTemplate(File(rootPath), project.name)
         } catch (e: Exception) {
             dao.deleteProject(id)
             throw e

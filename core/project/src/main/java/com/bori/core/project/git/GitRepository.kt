@@ -27,6 +27,13 @@ class GitRepository @Inject constructor() {
 
     fun isRepo(dir: File): Boolean = File(dir, ".git").exists()
 
+    /** The checked-out branch (or a short commit id when detached); null when [dir] isn't a repo. */
+    fun currentBranch(dir: File): String? {
+        if (!isRepo(dir)) return null
+        return runCatching { openGit(dir).use { it.repository.branch } }.getOrNull()
+            ?.let { if (it.length == 40 && it.all { c -> c.isLetterOrDigit() }) it.take(7) else it }
+    }
+
     suspend fun clone(url: String, dir: File, token: String = ""): Unit = withContext(Dispatchers.IO) {
         val cmd = Git.cloneRepository()
             .setURI(url)

@@ -314,6 +314,14 @@ class ToolExecutor @Inject constructor(
             }
         }
 
+        if (project.rootPath.isNotBlank()) {
+            val summary = if (status == "success") "debug build (agent), APK ${apkPath?.let { File(it).name }}"
+                else "debug build (agent), error: ${errorMsg?.lineSequence()?.firstOrNull().orEmpty().take(300)}"
+            withContext(Dispatchers.IO) {
+                runCatching { com.bori.core.project.agent.AgentFiles.appendBuildResult(File(project.rootPath), status == "success", summary) }
+            }
+        }
+
         val tail = allLogs.takeLast(20)
         val sb = StringBuilder()
         sb.appendLine("Build $status.")

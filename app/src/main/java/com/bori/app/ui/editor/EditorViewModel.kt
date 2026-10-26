@@ -52,7 +52,20 @@ class EditorViewModel @Inject constructor(
     private val projectRepository: ProjectRepository,
     private val toolsManager: ToolsManager,
     private val sessionState: SessionStateStore,
+    private val gitRepository: com.bori.core.project.git.GitRepository,
 ) : AndroidViewModel(application) {
+
+    /** The active project's git branch, shown next to its name; null when it isn't a repo. */
+    private val _currentBranch = MutableStateFlow<String?>(null)
+    val currentBranch: StateFlow<String?> = _currentBranch.asStateFlow()
+
+    /** Re-reads the branch (an agent in the terminal may have switched it). */
+    fun refreshBranch() {
+        val root = projectStateHolder.activeProject.value?.rootPath?.takeIf { it.isNotBlank() }
+        viewModelScope.launch(Dispatchers.IO) {
+            _currentBranch.value = root?.let { gitRepository.currentBranch(File(it)) }
+        }
+    }
 
     /** App-specific storage (Android/data/…/files); readable without any permission. */
     private val appFilesDir: File? = application.getExternalFilesDir(null)

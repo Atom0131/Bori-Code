@@ -166,6 +166,8 @@ fun ChatScreen(
     val aiName by viewModel.activeAiName.collectAsState()
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
     val pendingModeEntry by viewModel.pendingModeEntry.collectAsState()
+    val otherAgentLock by viewModel.otherAgentLock.collectAsState()
+    val pendingLockOverride by viewModel.pendingLockOverride.collectAsState()
     val showCompactBanner by viewModel.showCompactBanner.collectAsState()
     val isCompacting by viewModel.isCompacting.collectAsState()
     // Saveable, so a half-typed message survives Android recreating the screen.
@@ -471,6 +473,16 @@ fun ChatScreen(
         )
     }
 
+    com.bori.app.ui.common.PollAgentLock(activeProject?.rootPath) { viewModel.refreshAgentLock() }
+    pendingLockOverride?.let { pending ->
+        com.bori.app.ui.common.AgentLockDialog(
+            lock = pending.lock,
+            action = "run",
+            onConfirm = { viewModel.confirmLockOverride() },
+            onCancel = { viewModel.cancelLockOverride() },
+        )
+    }
+
     if (pendingModeEntry != null) {
         ModeEntryConfirmationDialog(
             entry = pendingModeEntry!!,
@@ -586,6 +598,7 @@ fun ChatScreen(
             if (isPlanMode && pendingPlan == null) PlanModeBanner(aiName)
             if (isAskMode && pendingQuestions == null && pendingPlan == null) AskModeBanner(aiName)
             if (!hasActiveProject) NoProjectBanner()
+            com.bori.app.ui.common.AgentLockBanner(otherAgentLock)
             com.bori.app.ui.common.FoldTipBanner()
             AnimatedVisibility(visible = showCompactBanner && !isCompacting) {
                 CompactConversationBanner(

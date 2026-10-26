@@ -131,11 +131,13 @@ class BuildViewModel @Inject constructor(
                             refreshInstallState(packageName)
                             buildStateHolder.onSuccess(event.apkPath, event.applicationId)
                             diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
+                            recordBuildForAgents(project.rootPath, ok = true, "${_variant.value.name.lowercase()} build, APK ${java.io.File(event.apkPath).name}")
                         }
                         is BuildEvent.Failure -> {
                             _uiState.value = UiState.Failed(event.error)
                             buildStateHolder.onFailure(event.error)
                             diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
+                            recordBuildForAgents(project.rootPath, ok = false, "${_variant.value.name.lowercase()} build, error: ${event.error.lineSequence().firstOrNull().orEmpty().take(300)}")
                         }
                         BuildEvent.Started -> Unit
                     }
@@ -143,6 +145,14 @@ class BuildViewModel @Inject constructor(
             } finally {
                 setLoading(false)
             }
+        }
+    }
+
+    /** Every agent (built-in, Claude Code, Antigravity) reads the last real build from .bori/handoff.md. */
+    private fun recordBuildForAgents(rootPath: String, ok: Boolean, summary: String) {
+        if (rootPath.isBlank()) return
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { com.bori.core.project.agent.AgentFiles.appendBuildResult(java.io.File(rootPath), ok, summary) }
         }
     }
 

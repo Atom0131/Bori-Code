@@ -388,14 +388,36 @@ fun EditorScreen(
     val visible = LocalPaneVisible.current
     LaunchedEffect(activeEngine, visible) { if (!visible) activeEngine?.view?.clearFocus() }
     var overflowMenu by remember { mutableStateOf(false) }
+    val otherAgentLock by chatViewModel.otherAgentLock.collectAsState()
+    val branch by viewModel.currentBranch.collectAsStateWithLifecycle()
+    com.bori.app.ui.common.PollAgentLock(activeProject?.rootPath) {
+        chatViewModel.refreshAgentLock()
+        viewModel.refreshBranch()
+    }
+    // Saving while another agent works asks once per lock; after "Save anyway" it stays quiet.
+    var lockSaveAsk by remember { mutableStateOf(false) }
+    var lockSaveOkFor by remember { mutableStateOf<Long?>(null) }
+    val save = {
+        val lock = otherAgentLock
+        if (lock != null && lockSaveOkFor != lock.startedMs) lockSaveAsk = true else viewModel.saveCurrentFile()
+    }
+    if (lockSaveAsk) otherAgentLock?.let { lock ->
+        com.bori.app.ui.common.AgentLockDialog(
+            lock = lock,
+            action = "save",
+            onConfirm = { lockSaveAsk = false; lockSaveOkFor = lock.startedMs; viewModel.saveCurrentFile() },
+            onCancel = { lockSaveAsk = false },
+        )
+    } ?: run { lockSaveAsk = false }
     Scaffold(
         contentWindowInsets = ShellContentInsets,
         topBar = {
             val errorCount = diagnostics.count { it.severity == com.bori.core.build.model.Diagnostic.Severity.ERROR }
+            Column {
             TopAppBar(
                 title = {
                     Text(
-                        text = activeProject?.name ?: "Editor",
+                        text = activeProject?.name?.let { name -> branch?.let { "$name · $it" } ?: name } ?: "Editor",
                         style = MaterialTheme.typography.titleSmall,
                         maxLines = 1,
                     )
@@ -457,7 +479,7 @@ fun EditorScreen(
                         }
                     }
                     IconButton(
-                        onClick = { viewModel.saveCurrentFile() },
+                        onClick = { save() },
                         enabled = tabState.activeTab != null,
                     ) {
                         Icon(Icons.Default.Save, contentDescription = "Save file")
@@ -507,6 +529,8 @@ fun EditorScreen(
                     }
                 },
             )
+            com.bori.app.ui.common.AgentLockBanner(otherAgentLock)
+            }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { innerPadding ->
@@ -683,7 +707,7 @@ fun EditorScreen(
                 .onPreviewKeyEvent { event ->
                     if (event.type == KeyEventType.KeyDown && event.isCtrlPressed) {
                         when (event.key) {
-                            Key.S -> { viewModel.saveCurrentFile(); true }
+                            Key.S -> { save(); true }
                             Key.B -> { isSidebarVisible = !isSidebarVisible; true }
                             Key.P -> { showQuickOpen = true; true }
                             Key.Grave -> { onOpenTerminal(); true }

@@ -87,6 +87,18 @@ class GuestPolicy @Inject constructor(
             |  `app/src/main/AndroidManifest.xml`, sources under `app/src/main/java/<package path>/` and
             |  resources under `app/src/main/res/`. Bori Code lists it the next time it opens.
             |
+            |## Working with other agents
+            |Bori Code's built-in agent and the other CLI (Claude Code or Antigravity) may work on the same
+            |project. They share three files in the project's `.bori/` folder:
+            |- First read `.bori/plan.md` (the shared plan: goal, scope, checklist, `STATUS:`, roles) and
+            |  `.bori/handoff.md` (what the last agent did and the last Bori build result), then run
+            |  `git status`. Don't redo work the handoff says is done. Stay inside the plan's scope.
+            |- `.bori/agent.lock` says who is working now (`agent=`, `task=`, `started=` in epoch ms). If
+            |  another agent holds it and it's under 2 hours old, ask the user before editing. Otherwise
+            |  write your own (`agent=Claude Code` or `agent=Antigravity`) and delete it when you finish.
+            |- When you finish, update `.bori/handoff.md`: the goal, files changed, what's left and the next
+            |  step. Keep its `## Last Bori build` section; Bori Code writes it after each build.
+            |
             |""".trimMargin() + AndroidBuildRules.TEXT + "\n"
         File(rootfs, "etc/claude-code/CLAUDE.md").apply { parentFile?.mkdirs() }.writeText(rules)
         // Antigravity CLI 1.4.7 loads global rules from config/rules/, not antigravity-cli/rules/ (emulator, 2026-10-25).

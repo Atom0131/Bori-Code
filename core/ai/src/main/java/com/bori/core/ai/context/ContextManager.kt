@@ -178,6 +178,7 @@ private const val MAX_CONTEXT_TOKENS = 16_000
 // ceiling; DeepSeek's limit is far higher) and responsive on a phone.
 private const val MAX_RESPONSE_TOKENS = 32_768
 private const val MAX_FILE_CHARS = 10_000
+private const val MAX_AGENT_NOTE_CHARS = 4_000
 
 @Singleton
 class ContextManager @Inject constructor() {
@@ -207,9 +208,14 @@ class ContextManager @Inject constructor() {
         filePath: String?,
         fileContent: String?,
         mentionedFiles: List<Pair<String, String>>,
+        sharedPlan: String?,
     ): String = buildString {
         appendLine("You are a helpful coding assistant for an Android app. Be concise and direct.")
         if (!projectLanguage.isNullOrBlank()) appendLine("Language: $projectLanguage")
+        if (!sharedPlan.isNullOrBlank()) {
+            appendLine("\n## Shared plan (.bori/plan.md), follow it")
+            append(sharedPlan.take(600))
+        }
         if (!repoMap.isNullOrBlank()) {
             appendLine("\n## Project Structure")
             append(repoMap.take(500))
@@ -241,6 +247,8 @@ class ContextManager @Inject constructor() {
         provider: AiProvider = AiProvider.ANTHROPIC,
         model: String = "",
         projectLanguage: String? = null,
+        sharedPlan: String? = null,
+        lastHandoff: String? = null,
     ): String {
         if (provider == AiProvider.LOCAL_GEMMA) return buildLocalGemmaPrompt(
             projectLanguage = projectLanguage,
@@ -248,6 +256,7 @@ class ContextManager @Inject constructor() {
             filePath = filePath,
             fileContent = fileContent,
             mentionedFiles = mentionedFiles,
+            sharedPlan = sharedPlan,
         )
         return buildString {
         val base = when {
@@ -261,6 +270,15 @@ class ContextManager @Inject constructor() {
         if (projectLanguage != null) {
             append("\n\n## Project Language\n")
             append("This project uses **$projectLanguage**. Write all new source files in $projectLanguage.")
+        }
+
+        if (!sharedPlan.isNullOrBlank() || !lastHandoff.isNullOrBlank()) {
+            append("\n\n## Shared plan / last handoff\n")
+            append("Claude Code and Antigravity in Bori Code's terminal may also work on this project. ")
+            append("Follow the approved plan and stay in its scope; don't redo work the handoff says is done. ")
+            append("When you finish, update .bori/handoff.md: the goal, files changed, the build result, the next step.")
+            if (!sharedPlan.isNullOrBlank()) append("\n\n### .bori/plan.md\n").append(sharedPlan.take(MAX_AGENT_NOTE_CHARS))
+            if (!lastHandoff.isNullOrBlank()) append("\n\n### .bori/handoff.md\n").append(lastHandoff.take(MAX_AGENT_NOTE_CHARS))
         }
 
         if (!repoMap.isNullOrBlank()) {
