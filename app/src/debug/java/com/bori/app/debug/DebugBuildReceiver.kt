@@ -21,7 +21,7 @@ import javax.inject.Inject
  * Starts a build from adb, for testing the on-device builder (debug builds only):
  *
  *     adb shell am broadcast -a com.bori.app.debug.BUILD -n <app id>/com.bori.app.debug.DebugBuildReceiver \
- *         --es project t1-kotlin-views [--ez release true] [--es ks <keystore> --es alias <alias> --es pass <password>]
+ *         --es project t1-kotlin-views [--ez release true [--ez bundle true]] [--es ks <keystore> --es alias <alias> --es pass <password>]
  *
  * The log goes to `<external files>/build-out/<project>.log`, ending with `RESULT OK <apk>` or
  * `RESULT FAIL <message>`, and the APK is copied next to it as `<project>.apk`.
@@ -43,7 +43,8 @@ class DebugBuildReceiver : BroadcastReceiver() {
                 val pass = intent.getStringExtra("pass").orEmpty()
                 KeystoreConfig(ks, intent.getStringExtra("alias").orEmpty(), pass, pass)
             } ?: if (variant == BuildVariant.RELEASE) keystoreRepository.get() else null
-            buildEngine.build(project, keystoreConfig = keystore, variant = variant).collect { event ->
+            val bundle = intent.getBooleanExtra("bundle", false)
+            buildEngine.build(project, keystoreConfig = keystore, variant = variant, appBundle = bundle).collect { event ->
                 when (event) {
                     is BuildEvent.Log -> log.appendText(event.message + "\n")
                     is BuildEvent.Success -> {

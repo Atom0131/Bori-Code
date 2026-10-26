@@ -27,6 +27,17 @@ fun openInstallPermissionSettings(context: Context) {
     )
 }
 
+/** Opens the share sheet for a built APK or app bundle (to save it to Files or Drive, or send it). */
+fun shareBuildOutput(context: Context, file: File) {
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val type = if (file.extension == "apk") "application/vnd.android.package-archive" else "application/octet-stream"
+    val send = Intent(Intent.ACTION_SEND)
+        .setType(type)
+        .putExtra(Intent.EXTRA_STREAM, uri)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    context.startActivity(Intent.createChooser(send, file.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}
+
 fun launchApkInstaller(context: Context, apkFile: File) {
     val uri = FileProvider.getUriForFile(
         context,

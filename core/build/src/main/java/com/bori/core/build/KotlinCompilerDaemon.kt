@@ -89,6 +89,16 @@ class KotlinCompilerDaemon @Inject constructor() {
         return newInstance
     }
 
+    /**
+     * True once the K2 frontend crashed on this device; compiles then use K1. Kept in the tools
+     * folder, which is wiped when the app updates, so a new version tries K2 again.
+     */
+    fun k2Unusable(tools: ToolsManager): Boolean = File(tools.context.filesDir, "tools/$K2_UNUSABLE").exists()
+
+    fun markK2Unusable(tools: ToolsManager) {
+        runCatching { File(tools.context.filesDir, "tools/$K2_UNUSABLE").writeText("K2 crashed in this app version\n") }
+    }
+
     fun clearCache() {
         cachedInstance = null
         cachedLoaderPath = null
@@ -218,7 +228,7 @@ class KotlinCompilerDaemon @Inject constructor() {
             Log.d(TAG, "Hidden API bypass applied successfully")
 
             // Lower runtime target SDK so the max-targetSdk hidden API tier doesn't block
-            // sun.misc.Unsafe.getAndAddInt (needed by Kotlin compiler 1.8.22 static init).
+            // sun.misc.Unsafe.getAndAddInt (needed by the Kotlin compiler's static init).
             try {
                 val clazz = Class.forName("dalvik.system.VMRuntime")
                 val setTargetSdk = clazz.getDeclaredMethod("setTargetSdkVersion", Int::class.javaPrimitiveType)
@@ -296,6 +306,16 @@ class KotlinCompilerDaemon @Inject constructor() {
         System.setProperty("idea.io.use.nio2", "false")
         System.setProperty("idea.use.native.fs", "false")
         System.setProperty("idea.use.nio.fs", "false")
+        // Kotlin 2's IntelliJ core asks PathManager for an IDE install (bin/idea.properties)
+        // while setting up; point it at a folder of the app's own.
+        val ideaHome = File(tools.context.filesDir, "tools/idea-home")
+        File(ideaHome, "bin").mkdirs()
+        File(ideaHome, "bin/idea.properties").takeIf { !it.exists() }?.writeText("")
+        System.setProperty("idea.home.path", ideaHome.absolutePath)
+        System.setProperty("idea.config.path", File(ideaHome, "config").absolutePath)
+        System.setProperty("idea.system.path", File(ideaHome, "system").absolutePath)
+        System.setProperty("idea.plugins.path", File(ideaHome, "plugins").absolutePath)
+        System.setProperty("idea.log.path", File(ideaHome, "log").absolutePath)
 
         val loaderPath = getLoaderPath(tools, extraPluginDexJars)
 
@@ -306,7 +326,7 @@ class KotlinCompilerDaemon @Inject constructor() {
 
         // Use system classloader as parent to ensure we don't pick up the app's Kotlin libraries.
         // This prevents ClassCastException during reflection (ClassReference vs KClassImpl).
-        val jarFiles = listOf(tools.kotlincJar, tools.kotlinStdlibDexJar, tools.kotlinReflectDexJar, tools.trove4jDexJar, tools.swingStubsDexJar, tools.jetbrainsAnnotationsDexJar) + extraPluginDexJars
+        val jarFiles = listOf(tools.kotlincJar) + tools.compilerRuntimeJars + extraPluginDexJars
         if (extraPluginDexJars.isNotEmpty()) {
             Log.d(TAG, "Compiler classloader includes ${extraPluginDexJars.size} plugin DEX jar(s): ${extraPluginDexJars.map { it.name }}")
         }
@@ -438,17 +458,15 @@ class KotlinCompilerDaemon @Inject constructor() {
     }
 
     private fun getLoaderPath(tools: ToolsManager, extraPluginDexJars: List<File> = emptyList()): String {
-        val base = "${tools.kotlincJar.absolutePath}:" +
-                "${tools.kotlinStdlibDexJar.absolutePath}:" +
-                "${tools.kotlinReflectDexJar.absolutePath}:" +
-                "${tools.trove4jDexJar.absolutePath}:" +
-                "${tools.swingStubsDexJar.absolutePath}:" +
-                "${tools.jetbrainsAnnotationsDexJar.absolutePath}"
+        // The bundled compiler plugins and KSP are always on it, so turning one on in a project
+        // doesn't throw away the warm compiler.
+        val base = (listOf(tools.kotlincJar) + tools.compilerRuntimeJars).joinToString(":") { it.absolutePath }
         if (extraPluginDexJars.isEmpty()) return base
         return base + ":" + extraPluginDexJars.joinToString(":") { it.absolutePath }
     }
 
     companion object {
         private const val TAG = "KotlinCompilerDaemon"
+        private const val K2_UNUSABLE = "k2-unusable"
     }
 }

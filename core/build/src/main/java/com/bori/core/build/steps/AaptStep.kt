@@ -41,11 +41,15 @@ class AaptStep(private val tools: ToolsManager) {
      * [renameManifestPackage] sets the installed package (applicationId) when it differs from the
      * manifest's package (the namespace, which R keeps); AAPT2 makes the component class names
      * absolute first. [proguardRulesOut] gets keep rules for the classes the manifest and layouts use.
+     *
+     * For an app bundle the same resources are linked again with [protoFormat] (the format
+     * bundletool and Play read). [emitIds] from the first link and [stableIds] on the second keep
+     * every resource ID the same, so the compiled R constants match both.
      */
     fun link(
         manifestFile: File,
         flatDirs: List<File>,
-        rJavaDir: File,
+        rJavaDir: File?,
         apkOut: File,
         emit: (String) -> Unit,
         minSdk: Int = 21,
@@ -55,6 +59,9 @@ class AaptStep(private val tools: ToolsManager) {
         versionName: String? = null,
         renameManifestPackage: String? = null,
         proguardRulesOut: File? = null,
+        protoFormat: Boolean = false,
+        emitIds: File? = null,
+        stableIds: File? = null,
     ) {
         val flatFiles = flatDirs
             .filter { it.exists() }
@@ -82,7 +89,10 @@ class AaptStep(private val tools: ToolsManager) {
             add("--auto-add-overlay")
             flatFiles.forEach { add("-R"); add(it) }
             add("-o"); add(apkOut.absolutePath)
-            add("--java"); add(rJavaDir.absolutePath)
+            rJavaDir?.let { add("--java"); add(it.absolutePath) }
+            if (protoFormat) add("--proto-format")
+            emitIds?.let { add("--emit-ids"); add(it.absolutePath) }
+            stableIds?.takeIf { it.exists() }?.let { add("--stable-ids"); add(it.absolutePath) }
             proguardRulesOut?.let { add("--proguard"); add(it.absolutePath) }
             if (extraPackages.isNotEmpty()) {
                 add("--extra-packages"); add(extraPackages.joinToString(":"))

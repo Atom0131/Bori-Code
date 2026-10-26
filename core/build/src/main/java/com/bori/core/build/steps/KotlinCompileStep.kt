@@ -18,6 +18,19 @@ import java.util.concurrent.TimeoutException
 
 class KotlinCompileStep(private val tools: ToolsManager) {
 
+    /**
+     * Compiles the Kotlin sources under [sourceRoots] into [classesDir].
+     *
+     * [compilerPlugins] are -Xplugin jars (the bundled Compose, serialization, parcelize and KSP
+     * plugins, already on the compiler's class loader), with their -P [pluginOptions].
+     * [extraLoaderDexJars] are dexed classes the plugins load (KSP's symbol processors).
+     * [k1] compiles with the K1 frontend (language version 1.9), which KSP1 requires.
+     * [runWithoutKotlin] runs even when there are no .kt files (KSP on a Java-only project).
+     * The plugin route passes the source folders, so the compiler sees the Java sources too.
+     *
+     * If the K2 frontend crashes on this device (not a compile error: an exception inside the
+     * compiler), the compile is retried once with K1 and later builds use K1 straight away.
+     */
     fun compile(
         sourceRoots: List<File>,
         classesDir: File,
@@ -25,11 +38,11 @@ class KotlinCompileStep(private val tools: ToolsManager) {
         timeoutSeconds: Long = COMPILE_TIMEOUT_SECONDS,
         daemon: KotlinCompilerDaemon,
         profile: CompilerPerformanceProfile,
-        processorJars: List<File> = emptyList(),
-        kaptPluginJar: File? = null,
-        kaptGeneratedSourcesDir: File? = null,
-        composePluginJar: File? = null,
-        pluginDexJars: List<File> = emptyList(),
+        compilerPlugins: List<File> = emptyList(),
+        pluginOptions: List<String> = emptyList(),
+        extraLoaderDexJars: List<File> = emptyList(),
+        k1: Boolean = false,
+        runWithoutKotlin: Boolean = false,
         emit: (String) -> Unit,
     ): Boolean {
         val ktFiles = sourceRoots.flatMap { root ->
@@ -37,25 +50,22 @@ class KotlinCompileStep(private val tools: ToolsManager) {
                 .filter { it.isFile && it.extension == "kt" }
                 .toList()
         }
-        if (ktFiles.isEmpty()) return true
+        if (ktFiles.isEmpty() && !runWithoutKotlin) return true
 
-        val validProcessorJars = processorJars.filter { it.exists() }
-        val useKapt = validProcessorJars.isNotEmpty() && kaptPluginJar?.exists() == true
-        val useCompose = composePluginJar?.exists() == true
+        val plugins = compilerPlugins.filter { it.exists() }
         // Any -Xplugin path forces the exec() compile route: the incremental API path doesn't
-        // reliably register compiler plugins, and kapt already requires exec() for stub generation.
-        val usePluginExec = useKapt || useCompose
-
-        if (useKapt) {
-            emit("Kotlin: compiling ${ktFiles.size} file(s) with kapt [${validProcessorJars.size} processor(s)] [Profile: ${profile.name}]")
-        } else if (useCompose) {
-            emit("Kotlin: compiling ${ktFiles.size} file(s) with Compose compiler plugin [Profile: ${profile.name}]")
-        } else {
-            emit("Kotlin: incremental compile [${ktFiles.size} source file(s)] [Profile: ${profile.name}]")
+        // reliably register compiler plugins.
+        val usePluginExec = plugins.isNotEmpty() || runWithoutKotlin
+        val useK1 = k1 || daemon.k2Unusable(tools)
+        val label = buildString {
+            append(if (usePluginExec) "Kotlin: compiling ${ktFiles.size} file(s)" else "Kotlin: incremental compile [${ktFiles.size} source file(s)]")
+            if (plugins.isNotEmpty()) append(" with ${plugins.joinToString { it.nameWithoutExtension }}")
+            if (useK1) append(" (K1)")
+            append(" [Profile: ${profile.name}]")
         }
+        emit(label)
 
-        Log.d(TAG, "=== KotlinCompileStep.compile ===")
-        Log.d(TAG, "Profile: $profile, useKapt: $useKapt, sourceFiles: ${ktFiles.size}")
+        Log.d(TAG, "=== KotlinCompileStep.compile === profile=$profile plugins=${plugins.map { it.name }} k1=$useK1 files=${ktFiles.size}")
 
         val kotlinHome = File(tools.kotlincJar.parentFile, "kotlinc-home")
         File(kotlinHome, "lib").mkdirs()
@@ -78,7 +88,7 @@ class KotlinCompileStep(private val tools: ToolsManager) {
 
         // Base args without source file paths (used by the incremental API path).
         // FastJarFileSystem avoids the NIO2 ZipFileSystem that crashes on Android.
-        val baseArgs = buildList {
+        fun baseArgs(k1: Boolean) = buildList {
             add("-kotlin-home"); add(kotlinHome.absolutePath)
             add("-classpath"); add(classpath)
             add("-d"); add(classesDir.absolutePath)
@@ -86,27 +96,15 @@ class KotlinCompileStep(private val tools: ToolsManager) {
             add("-no-jdk"); add("-no-stdlib"); add("-no-reflect")
             add("-Xuse-fast-jar-file-system")
             add("-Xintellij-plugin-root=${pluginsDir.absolutePath}")
-            if (useKapt && kaptPluginJar != null) {
-                val stubsDir = File(classesDir.parentFile, "kapt-stubs").also { it.mkdirs() }
-                val kaptClassesDir = File(classesDir.parentFile, "kapt-classes").also { it.mkdirs() }
-                kaptGeneratedSourcesDir?.mkdirs()
-                add("-Xplugin=${kaptPluginJar.absolutePath}")
-                add("-P"); add("plugin:org.jetbrains.kotlin.kapt3:sources=${kaptGeneratedSourcesDir?.absolutePath ?: stubsDir.absolutePath}")
-                add("-P"); add("plugin:org.jetbrains.kotlin.kapt3:classes=${kaptClassesDir.absolutePath}")
-                add("-P"); add("plugin:org.jetbrains.kotlin.kapt3:stubs=${stubsDir.absolutePath}")
-                val processorPath = validProcessorJars.joinToString(File.pathSeparator) { it.absolutePath }
-                add("-P"); add("plugin:org.jetbrains.kotlin.kapt3:apclasspath=$processorPath")
-                add("-P"); add("plugin:org.jetbrains.kotlin.kapt3:correctErrorTypes=true")
-            }
-            if (useCompose && composePluginJar != null) {
-                // The raw jar is passed so ServiceLoaderLite can scan META-INF/services for the
-                // ComponentRegistrar class name; the actual classes are supplied as a pre-dexed jar
-                // injected into the compiler's classloader (pluginDexJars → daemon loader path).
-                add("-Xplugin=${composePluginJar.absolutePath}")
-            }
+            // Libraries built with a newer Kotlin still load (their metadata is read leniently).
+            add("-Xskip-metadata-version-check")
+            if (k1) { add("-language-version"); add("1.9"); add("-api-version"); add("1.9") }
+            if (runWithoutKotlin) add("-Xallow-no-source-files")
+            // The plugin jars are dex + their original entries: -Xplugin's service lookup reads
+            // the entries, and the classes resolve from the compiler's class loader.
+            plugins.forEach { add("-Xplugin=${it.absolutePath}") }
+            pluginOptions.forEach { add("-P"); add(it) }
         }
-
-        Log.d(TAG, "compiler baseArgs: $baseArgs")
 
         val startMs = System.currentTimeMillis()
         val heartbeatEx = Executors.newSingleThreadScheduledExecutor()
@@ -115,16 +113,33 @@ class KotlinCompileStep(private val tools: ToolsManager) {
             emit("Kotlin: still compiling... ${elapsed}s / ${timeoutSeconds}s")
         }, 10, 10, TimeUnit.SECONDS)
 
-        return try {
-            val (exitName, output) = if (usePluginExec) {
-                // Plugin builds (kapt / Compose) require the exec() path: all source files are passed
-                // explicitly, and -Xplugin compiler plugins are registered during CLI environment setup.
-                val argsWithFiles = (baseArgs + ktFiles.map { it.absolutePath }).toTypedArray()
-                invokeCompiler(daemon, profile, argsWithFiles, timeoutSeconds, pluginDexJars)
+        fun run(k1: Boolean): Pair<String, String> {
+            val args = baseArgs(k1)
+            Log.d(TAG, "compiler args: $args")
+            return if (usePluginExec) {
+                // Folders, not files: the compiler then also reads the Java sources in them.
+                val inputs = sourceRoots.filter { it.exists() }.map { it.absolutePath }
+                invokeCompiler(daemon, profile, (args + inputs).toTypedArray(), timeoutSeconds, extraLoaderDexJars)
             } else {
                 // Official incremental API: source files are discovered from sourceRoots.
                 val cacheDir = File(classesDir.parentFile, "kotlin-ic-cache")
-                invokeIncrementalApi(daemon, profile, baseArgs.toTypedArray(), sourceRoots, cacheDir, timeoutSeconds)
+                invokeIncrementalApi(daemon, profile, args.toTypedArray(), sourceRoots, cacheDir, timeoutSeconds)
+            }
+        }
+
+        return try {
+            val (exitName, output) = try {
+                run(useK1)
+            } catch (e: Throwable) {
+                val root = deepUnwrap(e)
+                if (useK1 || root is TimeoutException || root is OutOfMemoryError) throw e
+                Log.e(TAG, "K2 crashed; retrying with K1", root)
+                emit("Kotlin: the K2 compiler crashed (${root.javaClass.simpleName}: ${root.message}); retrying with K1")
+                daemon.clearCache()
+                // If K1 fails the same way, the problem wasn't K2: report the first error.
+                val k1Result = try { run(true) } catch (_: Throwable) { throw e }
+                daemon.markK2Unusable(tools)
+                k1Result
             }
 
             if (output.isNotBlank()) Log.d(TAG, "compiler output:\n$output")
@@ -149,7 +164,7 @@ class KotlinCompileStep(private val tools: ToolsManager) {
         }
     }
 
-    /** Calls exec() on the compiler via the daemon (used for kapt builds). */
+    /** Calls exec() on the compiler via the daemon (used for plugin builds). */
     private fun invokeCompiler(
         daemon: KotlinCompilerDaemon,
         profile: CompilerPerformanceProfile,

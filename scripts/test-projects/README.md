@@ -9,7 +9,12 @@ to logcat with the tag `BORI_TEST` when it starts: `<name> OK …` when every ch
 | `t2-compose` | Compose 1.4 from a version catalog (`module =`, bundles, `alias(libs.plugins…)`) |
 | `t3-app-features` | `src/main/kotlin`, assets, a prebuilt `.so` in jniLibs, BuildConfig + `buildConfigField`, applicationId ≠ namespace, versionCode/versionName, a mipmap icon, a library's merged `<provider>`, a commented-out dependency |
 | `t5-multi-module` | Groovy DSL, `include ':app', ':core'`, a library module with resources, a service in its manifest and an `api` dependency (OkHttp) |
+| `t6-libraries` | Maven AndroidX instead of the bundled set (appcompat 1.7), a BOM via `platform()` with a versionless coordinate, a JitPack library, a jar in `libs/` (`fileTree`), ViewBinding, core library desugaring (`java.time` on minSdk 24), and an app bundle (`--ez bundle true`) |
+| `t7-compose-modern` | Kotlin 2 (K2), Compose 1.7 from the Compose BOM in a catalog with `[plugins]`, kotlinx.serialization, `@Parcelize`, Kotlin 1.9+ features |
+| `t8-room-hilt` | KSP on the phone: Room, Hilt (plugin applied, `@AndroidEntryPoint` / `@HiltAndroidApp`, a `kapt` line run through KSP) and Moshi codegen |
 
+`t1` and `t5` turn on `isMinifyEnabled` for release (R8); `t3` and `t6` don't (D8 `--release`).
+`t6-libraries/locallib` is the source of `app/libs/greeter.jar` (`javac --release 8`).
 `t3-app-features/native/t3.c` is the source of the `.so` files, built with NDK 28 for API 24
 with `-Wl,-z,max-page-size=16384`.
 
@@ -24,6 +29,7 @@ adb push t3-app-features /sdcard/Android/data/com.bori.code.debug/files/Bori/
 adb shell am broadcast -a com.bori.app.debug.BUILD \
     -n com.bori.code.debug/com.bori.app.debug.DebugBuildReceiver --es project t3-app-features
 # release: add --ez release true --es ks <keystore on the device> --es alias <alias> --es pass <password>
+# app bundle: also add --ez bundle true (the .aab is copied next to the log)
 ```
 
 The log is written to `/sdcard/Android/data/com.bori.code.debug/files/build-out/<project>.log`

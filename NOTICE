@@ -16,9 +16,16 @@ Third-party software in this repository and in the app, each under its own licen
   scripts/build_proot.sh; full flavor only. See third_party/README.md.
 - SCOWL word lists 2020.12.07, SCOWL license (MIT-like).
   See app/src/main/assets/keyboard/SCOWL-NOTICE.txt.
-- Kotlin compiler 1.8.22, Apache-2.0, bundled in core/build and patched for ART at build time
+- Kotlin compiler 2.0.21 with its Compose, kotlinx.serialization and Parcelize plugins, and
+  kotlinx-coroutines, Apache-2.0, bundled in core/build and patched for ART at build time
   (see docs/BUILD-PIPELINE.md).
-- Android build tools (aapt2, d8/R8) and Android platform stubs, Apache-2.0 (AOSP).
+- Kotlin Symbol Processing (KSP) 2.0.21-1.0.28, Apache-2.0, with kotlinx-serialization, Apache-2.0.
+- OpenJDK class libraries: the java.compiler module's javax.lang.model, javax.annotation.processing
+  and javax.tools API, and six javax.xml.stream interfaces, GPL-2.0 with the Classpath Exception,
+  bundled (dexed, SourceVersion patched) for the on-device compiler and symbol processors.
+- Android build tools (aapt2, d8/R8/L8) and Android platform stubs, Apache-2.0 (AOSP);
+  apksig, Apache-2.0 (AOSP).
+- ASM 9.7.1, BSD-3-Clause.
 - Eclipse Compiler for Java (ECJ) 4.6.1, EPL-1.0.
 - Sora Editor, LGPL-2.1; trove4j, LGPL-2.1; JGit, EDL-1.0; Bouncy Castle, MIT;
   OkHttp, AndroidX, Jetpack Compose, Hilt, Kotlin libraries, LiteRT-LM, Apache Commons

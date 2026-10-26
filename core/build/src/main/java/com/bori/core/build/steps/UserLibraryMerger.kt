@@ -25,6 +25,11 @@ data class UserLibraries(
     val proguardFiles: List<File> = emptyList(),
     /** True when [classesJar] already has the Kotlin stdlib (a dependency brought its own). */
     val hasKotlinStdlib: Boolean = false,
+    /**
+     * The separate jars [classesJar] was merged from, for the compile classpath: compiler plugins
+     * read a library's version from its own jar's manifest (kotlinx.serialization does).
+     */
+    val jars: List<File> = emptyList(),
 ) {
     companion object {
         val EMPTY = UserLibraries(null, emptyList(), emptyList())
@@ -113,6 +118,7 @@ class UserLibraryMerger(
             jniDirs = jniDirs,
             proguardFiles = proguardFiles,
             hasKotlinStdlib = hasStdlib,
+            jars = jarFiles.toList(),
         )
     }
 

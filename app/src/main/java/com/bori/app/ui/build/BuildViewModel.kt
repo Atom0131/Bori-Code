@@ -54,6 +54,14 @@ class BuildViewModel @Inject constructor(
     private val _variant = MutableStateFlow(BuildVariant.DEBUG)
     val variant: StateFlow<BuildVariant> = _variant.asStateFlow()
 
+    /** Release only: build an Android App Bundle (.aab) for Google Play instead of an APK. */
+    private val _appBundle = MutableStateFlow(false)
+    val appBundle: StateFlow<Boolean> = _appBundle.asStateFlow()
+
+    fun setAppBundle(on: Boolean) {
+        if (_uiState.value !is UiState.Building) _appBundle.value = on
+    }
+
     private val _hasCustomKeystore = MutableStateFlow(false)
     val hasCustomKeystore: StateFlow<Boolean> = _hasCustomKeystore.asStateFlow()
 
@@ -118,6 +126,7 @@ class BuildViewModel @Inject constructor(
                     compilerProfile = compilerProfile,
                     keystoreConfig = keystoreConfig,
                     variant = _variant.value,
+                    appBundle = _appBundle.value && _variant.value == BuildVariant.RELEASE,
                 ).collect { event ->
                     when (event) {
                         is BuildEvent.Log -> {
@@ -129,9 +138,10 @@ class BuildViewModel @Inject constructor(
                             val packageName = event.applicationId ?: project.packageName
                             _uiState.value = UiState.Done(event.apkPath, packageName)
                             refreshInstallState(packageName)
-                            buildStateHolder.onSuccess(event.apkPath, event.applicationId)
+                            // A bundle can't be installed; the last APK stays the one Install uses.
+                            if (!event.apkPath.endsWith(".aab")) buildStateHolder.onSuccess(event.apkPath, event.applicationId)
                             diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
-                            recordBuildForAgents(project.rootPath, ok = true, "${_variant.value.name.lowercase()} build, APK ${java.io.File(event.apkPath).name}")
+                            recordBuildForAgents(project.rootPath, ok = true, "${_variant.value.name.lowercase()} build, ${java.io.File(event.apkPath).name}")
                         }
                         is BuildEvent.Failure -> {
                             _uiState.value = UiState.Failed(event.error)

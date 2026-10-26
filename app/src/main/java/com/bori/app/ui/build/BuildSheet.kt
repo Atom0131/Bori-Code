@@ -48,7 +48,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.bori.core.build.model.BuildEvent
 import java.io.File
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun BuildSheet(
     viewModel: BuildViewModel,
@@ -60,6 +60,7 @@ fun BuildSheet(
     val isInstalled by viewModel.isInstalled.collectAsState()
     val variant by viewModel.variant.collectAsState()
     val hasCustomKeystore by viewModel.hasCustomKeystore.collectAsState()
+    val appBundle by viewModel.appBundle.collectAsState()
     val isBuilding = uiState is BuildViewModel.UiState.Building
     val listState = rememberLazyListState()
     val context = LocalContext.current
@@ -134,6 +135,21 @@ fun BuildSheet(
                 }
             }
 
+            // Release output: an APK to install, or an app bundle to upload to Google Play
+            if (variant == BuildVariant.RELEASE) {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    listOf(false to "APK", true to "App bundle (.aab)").forEachIndexed { index, (bundle, label) ->
+                        SegmentedButton(
+                            selected = appBundle == bundle,
+                            onClick = { viewModel.setAppBundle(bundle) },
+                            shape = SegmentedButtonDefaults.itemShape(index, 2),
+                            enabled = !isBuilding,
+                            label = { Text(label) },
+                        )
+                    }
+                }
+            }
+
             // Keystore warning when release is selected but no keystore configured
             if (variant == BuildVariant.RELEASE && !hasCustomKeystore) {
                 Row(
@@ -202,8 +218,9 @@ fun BuildSheet(
                         val f = File(state.apkPath)
                         if (f.exists()) "  ·  ${formatApkSize(f.length())}" else ""
                     }
+                    val what = if (state.apkPath.endsWith(".aab")) "App bundle ready for Google Play" else "Build successful"
                     Text(
-                        "✓ Build successful$sizeStr",
+                        "✓ $what$sizeStr",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -217,10 +234,11 @@ fun BuildSheet(
                 else -> Box(modifier = Modifier)
             }
 
-            // Action buttons
-            Row(
+            // Action buttons (they wrap onto a second line on a narrow screen)
+            androidx.compose.foundation.layout.FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 TextButton(onClick = onDismiss) {
                     Text("Close")
@@ -233,15 +251,21 @@ fun BuildSheet(
                         Text("View Logs")
                     }
 
-                    OutlinedButton(onClick = {
-                        val apkFile = File(apkPath)
-                        if (!canInstallPackages(context)) openInstallPermissionSettings(context)
-                        else launchApkInstaller(context, apkFile)
-                    }) {
-                        Text("Install APK")
+                    TextButton(onClick = { shareBuildOutput(context, File(apkPath)) }) {
+                        Text("Share")
                     }
 
-                    if (isInstalled) {
+                    if (!apkPath.endsWith(".aab")) {
+                        OutlinedButton(onClick = {
+                            val apkFile = File(apkPath)
+                            if (!canInstallPackages(context)) openInstallPermissionSettings(context)
+                            else launchApkInstaller(context, apkFile)
+                        }) {
+                            Text("Install APK")
+                        }
+                    }
+
+                    if (isInstalled && !apkPath.endsWith(".aab")) {
                         Button(onClick = { viewModel.launchApp(packageName) }) {
                             Text("Launch App")
                         }

@@ -83,8 +83,14 @@ object ModuleParser {
         val buildFeatures = block(android, "buildFeatures").orEmpty()
         val buildConfig = type == ModuleType.APPLICATION ||
             Regex("""\bbuildConfig\s*(?:=\s*|\s+)true""").containsMatchIn(buildFeatures)
+        val viewBinding = Regex("""\bviewBinding\s*(?:=\s*|\s+)true""").containsMatchIn(buildFeatures) ||
+            Regex("""\bviewBinding\s*\{[^}]*\b(?:is)?[eE]nabled\s*(?:=\s*|\s+)true""").containsMatchIn(android) ||
+            Regex("""\bviewBinding\.(?:is)?[eE]nabled\s*=\s*true""").containsMatchIn(android)
+        val composeFeature = Regex("""\bcompose\s*(?:=\s*|\s+)true""").containsMatchIn(buildFeatures)
+        val desugaring = Regex("""\b(?:is)?[cC]oreLibraryDesugaringEnabled\s*(?:=\s*|\s+)true""").containsMatchIn(android)
+        val minify = Regex("""\b(?:is)?[mM]inifyEnabled\s*(?:=\s*|\s+|\(\s*)true""").containsMatchIn(buildType)
 
-        val deps = parseDependencies(text, catalog, variant)
+        val deps = parseDependencies(text, catalog, variant, moduleDir)
         val main = File(moduleDir, "src/main")
         val proguardFiles = buildList {
             val names = if (type == ModuleType.APPLICATION) {
@@ -123,7 +129,48 @@ object ModuleParser {
             manifest = File(main, "AndroidManifest.xml").takeIf { it.isFile }
                 ?: File(moduleDir, "AndroidManifest.xml").takeIf { it.isFile },
             proguardFiles = proguardFiles,
+            platformDeps = deps.platforms,
+            localLibs = deps.localLibs,
+            coreLibraryDesugaring = desugaring,
+            desugarLibs = deps.coords["coreLibraryDesugaring"].orEmpty(),
+            viewBinding = viewBinding,
+            minifyEnabled = minify,
+            pluginIds = pluginIds(text, catalog),
+            composeFeature = composeFeature,
+            kspArgs = block(text, "ksp").orEmpty().let { ksp ->
+                Regex("""\barg\s*\(\s*["']([^"']+)["']\s*,\s*["']([^"']*)["']""").findAll(ksp)
+                    .associate { it.groupValues[1] to it.groupValues[2].replace("\$projectDir", moduleDir.absolutePath).replace("\${projectDir}", moduleDir.absolutePath) }
+            },
         )
+    }
+
+    /** Plugin ids from `plugins {}` (`id(...)`, `kotlin(...)`, `alias(libs.plugins.x)`) and `apply plugin:`. */
+    private fun pluginIds(text: String, catalog: VersionCatalogParser.Catalog): Set<String> {
+        val ids = mutableSetOf<String>()
+        val plugins = block(text, "plugins").orEmpty()
+        Regex("""\bid\s*\(?\s*["']([^"']+)["']""").findAll(plugins).forEach { ids += it.groupValues[1] }
+        Regex("""\bkotlin\s*\(\s*["']([^"']+)["']""").findAll(plugins).forEach { ids += "org.jetbrains.kotlin." + it.groupValues[1] }
+        Regex("""\balias\s*\(\s*libs\.plugins\.([\w.]+)""").findAll(plugins).forEach { m ->
+            catalog.plugin(m.groupValues[1])?.let { ids += it }
+        }
+        Regex("""\bapply\s*\(?\s*plugin\s*[:=]\s*["']([^"']+)["']""").findAll(text).forEach { ids += it.groupValues[1] }
+        return ids
+    }
+
+    /**
+     * Repositories the project adds besides Maven Central and Google Maven (JitPack, a company
+     * repo…), from settings.gradle(.kts) and the root build file: `maven("url")`,
+     * `maven { url = uri("url") }`, `maven { url "url" }`, `maven { setUrl("url") }`.
+     */
+    fun repositories(projectRoot: File): List<String> {
+        val files = listOf("settings.gradle.kts", "settings.gradle", "build.gradle.kts", "build.gradle").map { File(projectRoot, it) }
+        return files.filter { it.isFile }.flatMap { f ->
+            val text = stripComments(f.readText())
+            Regex("""\bmaven\s*(?:\(\s*(?:url\s*=\s*)?(?:uri\s*\(\s*)?["'](https?://[^"']+)["']|\{([^}]*)\})""").findAll(text).mapNotNull { m ->
+                m.groupValues[1].ifEmpty { null }
+                    ?: Regex("""["'](https?://[^"']+)["']""").find(m.groupValues[2])?.groupValues?.get(1)
+            }.toList()
+        }.map { it.trimEnd('/') }.distinct()
     }
 
     fun topologicalSort(modules: List<ModuleInfo>): List<ModuleInfo> {
@@ -144,17 +191,28 @@ object ModuleParser {
 
     // ── Dependencies ───────────────────────────────────────────────────────
 
-    private class Dependencies(val modules: List<String>, val coords: Map<String, List<String>>)
+    private class Dependencies(
+        val modules: List<String>,
+        val coords: Map<String, List<String>>,
+        val platforms: List<String>,
+        val localLibs: List<File>,
+    )
 
     /**
      * Groups dependency declarations by kind: "implementation" (also api, runtimeOnly and this
      * variant's debugImplementation / releaseImplementation), "compileOnly", "annotationProcessor",
      * "kapt" and "ksp". Test configurations are ignored.
      */
-    private fun parseDependencies(text: String, catalog: VersionCatalogParser.Catalog, variant: BuildVariant): Dependencies {
+    private fun parseDependencies(text: String, catalog: VersionCatalogParser.Catalog, variant: BuildVariant, moduleDir: File): Dependencies {
         val variantPrefix = if (variant == BuildVariant.RELEASE) "release" else "debug"
         val modules = mutableListOf<String>()
         val coords = mutableMapOf<String, MutableList<String>>()
+        val platforms = mutableListOf<String>()
+        val localLibs = mutableListOf<File>()
+        fun coordOf(arg: String): List<String>? =
+            Regex("""^["']([^"':]+:[^"':]+(?::[^"':@]+)?)(?::[^"'@]*)?(?:@\w+)?["']""").find(arg)?.groupValues?.get(1)?.let(::listOf)
+                ?: Regex("""^libs\.([\w.]+)""").find(arg)?.groupValues?.get(1)?.let { catalog.resolve(it.removeSuffix(".get")) }
+                ?: mapNotation(arg)?.let(::listOf)
         val statement = Regex("""(?m)^\s*([a-zA-Z]+)\s*(\(?)\s*(.+)$""")
         for (m in statement.findAll(block(text, "dependencies") ?: text)) {
             val config = m.groupValues[1]
@@ -162,7 +220,7 @@ object ModuleParser {
                 "implementation", "api", "runtimeOnly",
                 "${variantPrefix}Implementation", "${variantPrefix}Api", "${variantPrefix}RuntimeOnly" -> "implementation"
                 "compileOnly", "${variantPrefix}CompileOnly" -> "compileOnly"
-                "annotationProcessor", "kapt", "ksp" -> config
+                "annotationProcessor", "kapt", "ksp", "coreLibraryDesugaring" -> config
                 else -> continue
             }
             val arg = m.groupValues[3].trim()
@@ -172,15 +230,36 @@ object ModuleParser {
                 modules += if (module.startsWith(":")) module else ":$module"
                 continue
             }
-            // platform(...) BOMs, files(...) and fileTree(...) aren't supported yet.
-            if (Regex("""^(platform|enforcedPlatform|files|fileTree|kotlin)\s*\(""").containsMatchIn(arg)) continue
-            val found = Regex("""^["']([^"':]+:[^"':]+:[^"':@]+)(?::[^"'@]*)?(?:@\w+)?["']""").find(arg)?.groupValues?.get(1)?.let(::listOf)
-                ?: Regex("""^libs\.([\w.]+)""").find(arg)?.groupValues?.get(1)?.let { catalog.resolve(it.removeSuffix(".get")) }
-                ?: mapNotation(arg)?.let(::listOf)
-                ?: continue
+            val platform = Regex("""^(?:platform|enforcedPlatform)\s*\(\s*(.+)""").find(arg)
+            if (platform != null) {
+                if (kind == "implementation") coordOf(platform.groupValues[1])?.let { platforms += it }
+                continue
+            }
+            if (Regex("""^(?:files|fileTree)\s*\(""").containsMatchIn(arg)) {
+                if (kind == "implementation") localLibs += localFiles(arg, moduleDir)
+                continue
+            }
+            if (Regex("""^kotlin\s*\(""").containsMatchIn(arg)) continue
+            val found = coordOf(arg) ?: continue
             coords.getOrPut(kind) { mutableListOf() } += found
         }
-        return Dependencies(modules.distinct(), coords.mapValues { it.value.distinct() })
+        return Dependencies(modules.distinct(), coords.mapValues { it.value.distinct() }, platforms.distinct(), localLibs.distinct())
+    }
+
+    /**
+     * Jars and AARs named by `files("libs/a.jar")`, or under the folder of
+     * `fileTree("libs")` / `fileTree(dir: 'libs', include: ['*.jar'])` /
+     * `fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar", "*.aar")))`.
+     */
+    private fun localFiles(arg: String, moduleDir: File): List<File> {
+        val quoted = Regex("""["']([^"']+)["']""").findAll(arg).map { it.groupValues[1] }.toList()
+        if (arg.trimStart().startsWith("files")) {
+            return quoted.map { File(moduleDir, it) }.filter { it.isFile && it.extension in setOf("jar", "aar") }
+        }
+        val dir = Regex("""\bdir["']?\s*(?:to|:|=)\s*["']([^"']+)["']""").find(arg)?.groupValues?.get(1)
+            ?: quoted.firstOrNull { !it.contains('*') && it != "dir" && it != "include" } ?: return emptyList()
+        val extensions = quoted.filter { it.contains('*') }.map { it.substringAfterLast('.') }.toSet().ifEmpty { setOf("jar", "aar") }
+        return File(moduleDir, dir).walkTopDown().filter { it.isFile && it.extension in extensions }.sortedBy { it.path }.toList()
     }
 
     /** `group: 'g', name: 'a', version: 'v'` (Groovy) or `group = "g", name = "a", version = "v"` (Kotlin). */
@@ -258,7 +337,7 @@ object ModuleParser {
 
     private fun substitute(text: String, vars: Map<String, String>): String =
         if (vars.isEmpty()) text
-        else Regex("""\$\{?(\w+)}?""").replace(text) { m -> vars[m.groupValues[1]] ?: m.value }
+        else Regex("""\$\{?(\w+)\}?""").replace(text) { m -> vars[m.groupValues[1]] ?: m.value }
 
     /**
      * The text inside the first `header { ... }` block, matching braces and skipping strings.

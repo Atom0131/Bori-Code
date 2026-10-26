@@ -12,16 +12,17 @@ import com.bori.core.build.model.ModuleType
 import com.bori.core.build.steps.AaptStep
 import com.bori.core.build.steps.ApkPackager
 import com.bori.core.build.steps.ApkSigner
+import com.bori.core.build.steps.BundlePackager
 import com.bori.core.build.steps.DexStep
 import com.bori.core.build.steps.JavaCompileStep
 import com.bori.core.build.steps.KotlinCompileStep
 import com.bori.core.build.steps.LibraryManifest
 import com.bori.core.build.steps.ManifestMerger
 import com.bori.core.build.steps.MavenResolver
-import com.bori.core.build.steps.PluginDexer
 import com.bori.core.build.steps.ResolvedArtifact
 import com.bori.core.build.steps.UserLibraries
 import com.bori.core.build.steps.UserLibraryMerger
+import com.bori.core.build.steps.ViewBindingGenerator
 import com.bori.core.build.tools.ToolsManager
 import com.bori.core.project.model.Project
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -53,10 +54,12 @@ class BuildEngine @Inject constructor(
         compilerProfile: CompilerPerformanceProfile = CompilerPerformanceProfile.LOW,
         keystoreConfig: KeystoreConfig? = null,
         variant: BuildVariant = BuildVariant.DEBUG,
+        /** Release only: make an Android App Bundle (.aab, for Google Play) instead of an APK. */
+        appBundle: Boolean = false,
     ): Flow<BuildEvent> = flow {
         emit(BuildEvent.Started)
         try {
-            runBuild(project, kotlinTimeoutSeconds, compilerProfile, keystoreConfig, variant)
+            runBuild(project, kotlinTimeoutSeconds, compilerProfile, keystoreConfig, variant, appBundle && variant == BuildVariant.RELEASE)
         } catch (e: Throwable) {
             Log.e("BuildEngine", "Build failed with exception", e)
             val message = when (e) {
@@ -75,6 +78,7 @@ class BuildEngine @Inject constructor(
         compilerProfile: CompilerPerformanceProfile,
         keystoreConfig: KeystoreConfig?,
         variant: BuildVariant,
+        appBundle: Boolean,
     ) {
         val projectRoot = File(project.rootPath)
         val allModules = ModuleParser.readProject(projectRoot, variant, project.minSdk)
@@ -119,19 +123,16 @@ class BuildEngine @Inject constructor(
 
         // ── Step 1: Dependencies ───────────────────────────────────────────
         val mavenCacheDir = File(context.filesDir, "maven-cache")
-        val bundledPackages = readPackagesList(toolsManager.androidxPackagesTxt)
-        val merger = UserLibraryMerger(
-            aapt2 = toolsManager.aapt2,
-            aarCacheDir = File(context.filesDir, "aar-cache"),
-            bundledClassesJar = toolsManager.androidxClassesJar,
-            bundledPackages = bundledPackages.toSet(),
-        )
+        val repos = ModuleParser.repositories(projectRoot)
+        if (repos.isNotEmpty()) emit(BuildEvent.Log("Extra repositories: ${repos.joinToString()}"))
+        val resolver = MavenResolver(mavenCacheDir, repos)
+        val platforms = modules.flatMap { it.platformDeps }.distinct()
         suspend fun resolve(label: String, coords: List<String>): List<ResolvedArtifact> {
             if (coords.isEmpty()) return emptyList()
             emit(BuildEvent.Log("▶ Resolving ${coords.size} $label"))
             val logs = mutableListOf<String>()
             val artifacts = try {
-                MavenResolver(mavenCacheDir).resolve(coords) { logs += it }
+                resolver.resolve(coords, { logs += it }, platforms)
             } catch (e: Exception) {
                 logs += "⚠ Resolution failed: ${e.message}"
                 emptyList()
@@ -140,9 +141,40 @@ class BuildEngine @Inject constructor(
             return artifacts
         }
 
-        val userDeps = modules.flatMap { it.mavenDeps }.distinct()
+        // View Binding classes implement androidx.viewbinding.ViewBinding, which AGP adds for you.
+        val viewBindingDeps = if (modules.any { it.viewBinding }) listOf("androidx.databinding:viewbinding:$VIEWBINDING_VERSION") else emptyList()
+        // @Parcelize's annotation and runtime, which the Kotlin Gradle plugin adds for kotlin-parcelize.
+        val parcelizeDeps = if (modules.any { it.parcelizePlugin }) listOf("org.jetbrains.kotlin:kotlin-parcelize-runtime:$KOTLIN_VERSION") else emptyList()
+        val userDeps = (modules.flatMap { it.mavenDeps } + viewBindingDeps + parcelizeDeps).distinct()
+        val depArtifacts = resolve("dependency(-ies)", userDeps) + localArtifacts(modules)
+
+        // The built-in AndroidX set is used unless the project needs a newer version of one of
+        // its libraries; then everything comes from Maven, as in Gradle, so versions never mix.
+        val bundledVersions = readBundledVersions(toolsManager.androidxVersionsTxt, toolsManager.androidxClassesJar)
+        val needsNewer = depArtifacts.mapNotNull { a ->
+            val bundled = bundledVersions[a.groupArtifact] ?: return@mapNotNull null
+            val wanted = a.coord.substringAfterLast(':')
+            if (MavenResolver.compareVersions(wanted, bundled) > 0) "${a.groupArtifact} $wanted (built-in $bundled)" else null
+        }
+        val bundle = if (needsNewer.isEmpty()) {
+            Bundle(
+                classesJar = toolsManager.androidxClassesJar,
+                classes2Dex = toolsManager.androidxClasses2Dex,
+                resFlatDir = toolsManager.androidxResFlatDir,
+                manifestEntries = toolsManager.androidxManifestEntriesXml,
+                packages = readPackagesList(toolsManager.androidxPackagesTxt),
+            )
+        } else {
+            emit(BuildEvent.Log("AndroidX from Maven instead of the built-in set, which is older than: ${needsNewer.take(4).joinToString()}${if (needsNewer.size > 4) " and ${needsNewer.size - 4} more" else ""}"))
+            null
+        }
+        val merger = UserLibraryMerger(
+            aapt2 = toolsManager.aapt2,
+            aarCacheDir = File(context.filesDir, "aar-cache"),
+            bundledClassesJar = bundle?.classesJar,
+            bundledPackages = bundle?.packages.orEmpty().toSet(),
+        )
         var userLibs = UserLibraries.EMPTY
-        val depArtifacts = resolve("dependency(-ies)", userDeps)
         if (depArtifacts.isNotEmpty()) {
             val logs = mutableListOf<String>()
             try {
@@ -158,50 +190,64 @@ class BuildEngine @Inject constructor(
             logs.forEach { emit(BuildEvent.Log(it)) }
             jars
         }
-        val processorJars = resolve("annotation processor(s)", modules.flatMap { it.annotationProcessors }.distinct())
-            .map { it.file }.filter { it.exists() }
-
-        var kaptProcessorJars: List<File> = emptyList()
-        var kaptPluginJar: File? = null
-        val kaptDeps = modules.flatMap { it.kaptProcessors }.distinct()
-        if (kaptDeps.isNotEmpty()) {
-            kaptProcessorJars = resolve("kapt processor(s)", kaptDeps).map { it.file }.filter { it.exists() }
-            kaptPluginJar = resolve("kapt plugin", listOf("org.jetbrains.kotlin:kotlin-annotation-processing-embeddable:1.8.22"))
-                .firstOrNull()?.file?.takeIf { it.exists() }
-        }
-        val kspDeps = modules.flatMap { it.kspProcessors }.distinct()
-        if (kspDeps.isNotEmpty()) {
-            emit(BuildEvent.Log("⚠ KSP isn't supported on the phone yet, so these ksp(...) processors are skipped: ${kspDeps.joinToString()}", BuildEvent.Log.Level.WARN))
-        }
-
-        // Compose compiler plugin, when the project depends on androidx.compose. The plugin jar
-        // is resolved from Maven, runtime-dexed, and the dex injected into the compiler's
-        // classloader so the ComponentRegistrar loads on ART. Compose runtime classes ride the
-        // normal user-dep classpath since they're declared as implementation(...) deps.
-        var composePluginJar: File? = null
-        var composePluginDexJars: List<File> = emptyList()
-        if (userDeps.any { it.substringBefore(':').startsWith("androidx.compose") }) {
-            val logs = mutableListOf<String>()
-            val artifacts = resolve("Compose compiler plugin $COMPOSE_COMPILER_VERSION", listOf("androidx.compose.compiler:compiler:$COMPOSE_COMPILER_VERSION"))
-            try {
-                // Inject ONLY the compose compiler jar (self-contained embeddable). Transitive
-                // jars (stdlib, kotlin-compiler-embeddable) must not shadow the on-device kotlinc.
-                val rawJar = artifacts.map { it.file }.firstOrNull { it.name == "compiler-$COMPOSE_COMPILER_VERSION.jar" && it.exists() }
-                if (rawJar != null) {
-                    val dexDir = File(context.filesDir, "plugin-dex").also { it.mkdirs() }
-                    val dexOut = File(dexDir, "compose-compiler-$COMPOSE_COMPILER_VERSION-dex.jar")
-                    composePluginDexJars = listOf(PluginDexer(toolsManager).dex(rawJar, dexOut) { logs += it })
-                    composePluginJar = rawJar
-                } else {
-                    logs += "⚠ Compose compiler jar not found in resolved artifacts"
-                }
-            } catch (e: Exception) {
-                logs += "⚠ Compose plugin setup failed: ${e.message}"
+        // Symbol processors (Room, Hilt/Dagger, Moshi…) run through KSP inside the on-device
+        // compiler. kapt and javac annotation processing need javac, which Android doesn't have, so
+        // kapt(...) and annotationProcessor(...) processors that also support KSP run through KSP.
+        val kspCoords = mutableListOf<String>()
+        val noKsp = mutableListOf<String>()
+        for (m in modules) {
+            kspCoords += m.kspProcessors
+            for (coord in m.kaptProcessors + m.annotationProcessors) {
+                kspEquivalent(coord)?.let { kspCoords += it } ?: run { noKsp += coord }
             }
-            logs.forEach { emit(BuildEvent.Log(it)) }
+        }
+        if (noKsp.isNotEmpty()) {
+            emit(BuildEvent.Log("⚠ kapt/annotationProcessor can't run on the phone (no javac) and these have no KSP version, so they're skipped: ${noKsp.distinct().joinToString()}", BuildEvent.Log.Level.WARN))
+        }
+        val processors = resolve("symbol processor(s)", kspCoords.distinct())
+            .filter { a -> a.groupArtifact !in KSP_PROVIDED && !a.groupArtifact.startsWith("org.jetbrains.kotlin:kotlin-stdlib") }
+        var processorDex: List<File> = emptyList()
+        if (processors.isNotEmpty()) {
+            step("Prepare ${processors.size} symbol processor jar(s)") { log -> processorDex = processors.flatMap { processorDex(it, log) } }
+        }
+        val hilt = modules.any { it.hiltPlugin } || processors.any { it.groupArtifact == "com.google.dagger:hilt-compiler" }
+        val apOptions = buildList {
+            modules.forEach { m -> m.kspArgs.forEach { (k, v) -> add("$k=$v") } }
+            if (processors.any { it.groupArtifact.startsWith("com.google.dagger:") }) {
+                // google-java-format needs javac; the code compiles the same unformatted.
+                add("dagger.formatGeneratedSource=disabled")
+            }
+            // The superclass is switched to Hilt_… after compiling (HiltTransform), as the Hilt plugin does.
+            if (hilt) add("dagger.hilt.android.internal.disableAndroidSuperclassValidation=true")
         }
 
-        val baseClasspath = listOfNotNull(toolsManager.androidxClassesJar, userLibs.classesJar) + compileOnlyJars
+        // Kotlin compiler plugins, bundled with the app (Compose, kotlinx.serialization, Parcelize).
+        val composeOn = modules.any { it.composeEnabled } ||
+            (userDeps + platforms).any { it.substringBefore(':').startsWith("androidx.compose") }
+        val compilerPlugins = buildList {
+            if (composeOn) add(toolsManager.composePluginJar)
+            if (modules.any { it.serializationPlugin }) add(toolsManager.serializationPluginJar)
+            if (modules.any { it.parcelizePlugin }) add(toolsManager.parcelizePluginJar)
+        }
+
+        // Core library desugaring: java.time, streams… on Android versions that lack them.
+        val desugarConfig: File?
+        var desugarLib: File? = null
+        if (app.coreLibraryDesugaring) {
+            val coords = app.desugarLibs.ifEmpty { listOf("com.android.tools:desugar_jdk_libs:$DESUGAR_JDK_LIBS_VERSION") }
+            val artifacts = resolve("desugaring library", coords)
+            desugarLib = artifacts.firstOrNull { it.groupArtifact == "com.android.tools:desugar_jdk_libs" }?.file
+            val configJar = artifacts.firstOrNull { it.groupArtifact == "com.android.tools:desugar_jdk_libs_configuration" }?.file
+            desugarConfig = configJar?.let { extractDesugarConfig(it, File(buildRoot, "desugar.json")) }
+            if (desugarLib == null || desugarConfig == null) {
+                emit(BuildEvent.Log("⚠ Core library desugaring is on but desugar_jdk_libs couldn't be resolved; building without it", BuildEvent.Log.Level.WARN))
+                desugarLib = null
+            }
+        } else desugarConfig = null
+
+        // The libraries' own jars, not the merged one: compiler plugins read their manifests.
+        val libraryJars = userLibs.jars.ifEmpty { listOfNotNull(userLibs.classesJar) }
+        val baseClasspath = listOfNotNull(bundle?.classesJar) + libraryJars + compileOnlyJars
         val sourceRoots = modules.flatMap { it.sourceDirs }
         val ktFiles = sourceRoots.flatMap { root -> root.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList() }
         val javaUserFiles = sourceRoots.flatMap { root -> root.walkTopDown().filter { it.isFile && it.extension == "java" }.toList() }
@@ -211,13 +257,16 @@ class BuildEngine @Inject constructor(
         val rJavaDir = File(buildRoot, "r/java")
         val unsignedResApk = File(buildRoot, "res.apk")
         val aaptRules = File(buildRoot, "aapt-rules.pro")
+        val resIds = File(buildRoot, "res-ids.txt")
+        val protoResApk = File(buildRoot, "res-proto.apk")
         val libraryManifests = libraryModules.mapNotNull { m -> m.manifest?.let { LibraryManifest(it, m.namespace) } } +
             userLibs.manifests +
-            LibraryManifest(toolsManager.androidxManifestEntriesXml, "")
+            listOfNotNull(bundle?.let { LibraryManifest(it.manifestEntries, "") })
         // Everything that changes what AAPT2 links, besides the files themselves.
         val linkSettings = writeIfChanged(File(buildRoot, "link-settings.txt"), listOf(
             app.applicationId, app.namespace, app.versionCode, app.versionName, app.minSdk, app.targetSdk,
             userLibs.resFlatDirs.joinToString(), userLibs.packages.joinToString(), libraryManifests.joinToString { it.file.path },
+            if (bundle != null) "bundle" else "maven",
         ).joinToString("\n"))
         val resInputs = buildList {
             modules.mapNotNull { it.resDir }.forEach { dir -> dir.walkTopDown().filter { it.isFile }.forEach { add(it) } }
@@ -225,11 +274,12 @@ class BuildEngine @Inject constructor(
             add(appManifest)
             add(linkSettings)
         }
-        val resManifestChanged = cache.changed("res+manifest", resInputs) || !unsignedResApk.exists()
+        val resManifestChanged = cache.changed("res+manifest", resInputs) || !unsignedResApk.exists() ||
+            (appBundle && (!protoResApk.exists() || !resIds.exists()))
 
         if (resManifestChanged) {
             val flatDirs = mutableListOf<File>()
-            flatDirs += toolsManager.androidxResFlatDir
+            bundle?.let { flatDirs += it.resFlatDir }
             flatDirs += userLibs.resFlatDirs
             for (module in modules) {
                 val resDir = module.resDir ?: continue
@@ -250,7 +300,7 @@ class BuildEngine @Inject constructor(
                 emit(BuildEvent.Log("⚠ Manifest merge failed (using the app manifest alone): ${e.message}", BuildEvent.Log.Level.WARN))
                 patched
             }
-            val extraPackages = (bundledPackages + userLibs.packages + libraryModules.map { it.namespace })
+            val extraPackages = (bundle?.packages.orEmpty() + userLibs.packages + libraryModules.map { it.namespace })
                 .filter { it.isNotBlank() && it != app.namespace }
                 .distinct()
             rJavaDir.deleteRecursively()
@@ -269,7 +319,27 @@ class BuildEngine @Inject constructor(
                     versionName = app.versionName,
                     renameManifestPackage = app.applicationId.takeIf { it.isNotBlank() && it != app.namespace },
                     proguardRulesOut = aaptRules,
+                    emitIds = resIds,
                 )
+            }
+            if (appBundle) {
+                // The same resources again in the proto format Play reads, with the same IDs.
+                step("AAPT2 link (app bundle)") { log ->
+                    AaptStep(toolsManager).link(
+                        manifestFile = manifestForLink,
+                        flatDirs = flatDirs,
+                        rJavaDir = null,
+                        apkOut = protoResApk,
+                        emit = log,
+                        minSdk = app.minSdk,
+                        targetSdk = app.targetSdk,
+                        versionCode = app.versionCode,
+                        versionName = app.versionName,
+                        renameManifestPackage = app.applicationId.takeIf { it.isNotBlank() && it != app.namespace },
+                        protoFormat = true,
+                        stableIds = resIds,
+                    )
+                }
             }
             cache.markClean("res+manifest", resInputs)
         } else {
@@ -282,13 +352,13 @@ class BuildEngine @Inject constructor(
 
         // 3a: R.java and BuildConfig.java, whenever AAPT2 link ran or BuildConfig changed
         val buildConfigDir = File(buildRoot, "generated/buildconfig")
-        val buildConfigFiles = writeBuildConfigs(modules, variant, buildConfigDir)
+        val buildConfigFiles = writeBuildConfigs(modules, variant, buildConfigDir) + writeViewBindings(modules, File(buildRoot, "generated/viewbinding"))
         val buildConfigChanged = cache.changed("buildconfig", buildConfigFiles)
         if (resManifestChanged || buildConfigChanged) {
-            emit(BuildEvent.Log("▶ Java compile R.java + BuildConfig"))
+            emit(BuildEvent.Log("▶ Java compile R.java + BuildConfig${if (modules.any { it.viewBinding }) " + View Binding" else ""}"))
             val logs = mutableListOf<String>()
             val ok = JavaCompileStep(toolsManager).compile(
-                sourceRoots = listOf(rJavaDir, buildConfigDir),
+                sourceRoots = listOf(rJavaDir, buildConfigDir, File(buildRoot, "generated/viewbinding")),
                 classesDir = classesDir,
                 extraClasspath = baseClasspath,
                 applyHiddenApiBypass = { kotlinDaemon.applyHiddenApiBypass() },
@@ -304,52 +374,87 @@ class BuildEngine @Inject constructor(
             emit(BuildEvent.Log("↩ Skipped R.java compile (resources unchanged)"))
         }
 
-        // 3b: Kotlin — skipped when no sources changed (kapt and Compose always force a full compile)
-        val kaptGeneratedSourcesDir = if (kaptProcessorJars.isNotEmpty()) File(buildRoot, "kapt-generated").also { it.mkdirs() } else null
-        // Kotlin reads the Java sources too, so a Java change can change what Kotlin compiles to.
-        val ktChanged = ktFiles.isNotEmpty() && cache.changed("sources-kt", ktFiles + javaUserFiles + baseClasspath)
-        val forceFullKt = kaptProcessorJars.isNotEmpty() || composePluginJar != null
-        if (ktFiles.isNotEmpty() && (forceFullKt || ktChanged || resManifestChanged || buildConfigChanged)) {
-            step("Kotlin compile") { log ->
+        // 3b: KSP. It reads the Kotlin and Java sources and writes generated sources, which the
+        // Kotlin and Java compiles below then include. It runs on every build that has processors.
+        val kspRoot = File(buildRoot, "ksp")
+        val kspKotlinOut = File(kspRoot, "kotlin")
+        val kspJavaOut = File(kspRoot, "java")
+        val kspClassesOut = File(kspRoot, "classes")
+        val kspResourcesOut = File(kspRoot, "resources")
+        if (processors.isNotEmpty()) {
+            listOf(kspKotlinOut, kspJavaOut, kspClassesOut, kspResourcesOut).forEach { it.deleteRecursively(); it.mkdirs() }
+            step("KSP (${processors.size} processor jar(s))") { log ->
+                val p = "plugin:com.google.devtools.ksp.symbol-processing"
+                val options = listOf(
+                    "$p:apclasspath=${processors.joinToString(File.pathSeparator) { it.file.absolutePath }}",
+                    "$p:projectBaseDir=${projectRoot.absolutePath}",
+                    "$p:classOutputDir=${kspClassesOut.absolutePath}",
+                    "$p:javaOutputDir=${kspJavaOut.absolutePath}",
+                    "$p:kotlinOutputDir=${kspKotlinOut.absolutePath}",
+                    "$p:resourceOutputDir=${kspResourcesOut.absolutePath}",
+                    "$p:kspOutputDir=${kspRoot.absolutePath}",
+                    "$p:cachesDir=${File(kspRoot, "caches").absolutePath}",
+                    "$p:incremental=false",
+                ) + apOptions.map { "$p:apoption=$it" }
                 val ok = KotlinCompileStep(toolsManager).compile(
                     sourceRoots = sourceRoots,
+                    classesDir = File(kspRoot, "analysis-out").also { it.mkdirs() },
+                    extraClasspath = listOf(classesDir) + baseClasspath,
+                    timeoutSeconds = kotlinTimeoutSeconds,
+                    daemon = kotlinDaemon,
+                    profile = compilerProfile,
+                    compilerPlugins = listOf(toolsManager.kspPluginJar),
+                    pluginOptions = options,
+                    extraLoaderDexJars = processorDex,
+                    k1 = true, // KSP1 runs on the K1 frontend
+                    runWithoutKotlin = true,
+                    emit = log,
+                )
+                if (!ok) throw RuntimeException("Symbol processing (KSP) failed — check errors above")
+                val generated = listOf(kspKotlinOut, kspJavaOut).sumOf { d -> d.walkTopDown().count { it.isFile } }
+                log("KSP: $generated generated source file(s)")
+                kspClassesOut.takeIf { d -> d.walkTopDown().any { it.isFile } }?.copyRecursively(classesDir, overwrite = true)
+            }
+        }
+        val generatedRoots = if (processors.isEmpty()) emptyList() else listOf(kspKotlinOut, kspJavaOut)
+        val kotlinRoots = sourceRoots + generatedRoots
+        val allKtFiles = ktFiles + (if (processors.isEmpty()) emptyList() else kspKotlinOut.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList())
+
+        // 3c: Kotlin — skipped when no sources changed (plugins and KSP always force a full compile)
+        // Kotlin reads the Java sources too, so a Java change can change what Kotlin compiles to.
+        val ktChanged = allKtFiles.isNotEmpty() && cache.changed("sources-kt", ktFiles + javaUserFiles + baseClasspath)
+        val forceFullKt = processors.isNotEmpty() || compilerPlugins.isNotEmpty()
+        if (allKtFiles.isNotEmpty() && (forceFullKt || ktChanged || resManifestChanged || buildConfigChanged)) {
+            step("Kotlin compile") { log ->
+                val ok = KotlinCompileStep(toolsManager).compile(
+                    sourceRoots = kotlinRoots,
                     classesDir = classesDir,
                     extraClasspath = listOf(classesDir) + baseClasspath,
                     timeoutSeconds = kotlinTimeoutSeconds,
                     daemon = kotlinDaemon,
                     profile = compilerProfile,
-                    processorJars = kaptProcessorJars,
-                    kaptPluginJar = kaptPluginJar,
-                    kaptGeneratedSourcesDir = kaptGeneratedSourcesDir,
-                    composePluginJar = composePluginJar,
-                    pluginDexJars = composePluginDexJars,
+                    compilerPlugins = compilerPlugins,
                     emit = log,
                 )
                 if (!ok) throw RuntimeException("Kotlin compilation failed — check errors above")
             }
             if (!forceFullKt) cache.markClean("sources-kt", ktFiles + javaUserFiles + baseClasspath)
             recompiled = true
-        } else if (ktFiles.isNotEmpty()) {
+        } else if (allKtFiles.isNotEmpty()) {
             emit(BuildEvent.Log("↩ Skipped Kotlin compile (sources unchanged)"))
         }
 
-        // 3c: Java (ECJ) user sources, with kapt-generated sources
-        val generatedSourcesDir = File(buildRoot, "generated-sources").also { it.mkdirs() }
-        val javaSourceRoots = buildList {
-            addAll(sourceRoots)
-            kaptGeneratedSourcesDir?.takeIf { it.exists() && it.walkTopDown().any { f -> f.extension == "java" } }?.let { add(it) }
-        }
+        // 3d: Java (ECJ): the project's Java sources and the Java that KSP generated
+        val javaSourceRoots = sourceRoots + listOf(kspJavaOut).filter { processors.isNotEmpty() && it.walkTopDown().any { f -> f.extension == "java" } }
+        val generatedJava = processors.isNotEmpty() && kspJavaOut.walkTopDown().any { it.extension == "java" }
         val javaChanged = javaUserFiles.isNotEmpty() && cache.changed("sources-java", javaUserFiles + baseClasspath)
-        if (kaptProcessorJars.isNotEmpty() || javaChanged || (javaUserFiles.isNotEmpty() && (resManifestChanged || buildConfigChanged))) {
-            val label = if (kaptGeneratedSourcesDir != null) "Java compile (ECJ + kapt sources)" else "Java compile (ECJ)"
-            emit(BuildEvent.Log("▶ $label"))
+        if (generatedJava || javaChanged || (javaUserFiles.isNotEmpty() && (resManifestChanged || buildConfigChanged || recompiled))) {
+            emit(BuildEvent.Log(if (generatedJava) "▶ Java compile (ECJ + generated sources)" else "▶ Java compile (ECJ)"))
             val compileLogs = mutableListOf<String>()
             val compileOk = JavaCompileStep(toolsManager).compile(
                 sourceRoots = javaSourceRoots,
                 classesDir = classesDir,
                 extraClasspath = baseClasspath,
-                processorJars = processorJars,
-                generatedSourcesDir = if (processorJars.isNotEmpty()) generatedSourcesDir else null,
                 applyHiddenApiBypass = { kotlinDaemon.applyHiddenApiBypass() },
             ) { compileLogs += it }
             compileLogs.forEach { emit(BuildEvent.Log(it)) }
@@ -357,29 +462,18 @@ class BuildEngine @Inject constructor(
                 emit(BuildEvent.Failure("Java compilation failed — check errors above"))
                 return
             }
-            // Second pass to compile generated sources (from annotation processors)
-            if (processorJars.isNotEmpty()) {
-                val generatedFiles = generatedSourcesDir.walkTopDown().filter { it.isFile && it.extension == "java" }.toList()
-                if (generatedFiles.isNotEmpty()) {
-                    emit(BuildEvent.Log("▶ Java compile generated sources (${generatedFiles.size} file(s))"))
-                    val genLogs = mutableListOf<String>()
-                    val genOk = JavaCompileStep(toolsManager).compile(
-                        sourceRoots = listOf(generatedSourcesDir),
-                        classesDir = classesDir,
-                        extraClasspath = baseClasspath + listOf(classesDir),
-                        applyHiddenApiBypass = { kotlinDaemon.applyHiddenApiBypass() },
-                    ) { genLogs += it }
-                    genLogs.forEach { emit(BuildEvent.Log(it)) }
-                    if (!genOk) {
-                        emit(BuildEvent.Failure("Generated source compilation failed — check errors above"))
-                        return
-                    }
-                }
-            }
-            if (kaptProcessorJars.isEmpty()) cache.markClean("sources-java", javaUserFiles + baseClasspath)
+            if (!generatedJava) cache.markClean("sources-java", javaUserFiles + baseClasspath)
             recompiled = true
         } else if (javaUserFiles.isNotEmpty()) {
             emit(BuildEvent.Log("↩ Skipped Java compile (sources unchanged)"))
+        }
+
+        // 3e: Hilt entry points extend their generated Hilt_ classes (the Hilt Gradle plugin's transform)
+        if (hilt && recompiled) {
+            step("Hilt entry points") { log ->
+                val n = com.bori.core.build.steps.HiltTransform.apply(classesDir, log)
+                if (n == 0) log("Hilt: no @AndroidEntryPoint / @HiltAndroidApp classes to update")
+            }
         }
 
         // ── Step 4: Dex ────────────────────────────────────────────────────
@@ -389,17 +483,22 @@ class BuildEngine @Inject constructor(
         // The bundled AndroidX dex was desugared for API 21, so interface default methods became
         // static helpers. Code that implements those interfaces has to be desugared the same
         // way, or calls hit AbstractMethodError (DefaultLifecycleObserver in Compose).
-        val dexMinApi = minOf(app.minSdk, BUNDLED_DEX_MIN_API)
+        val dexMinApi = if (bundle != null) minOf(app.minSdk, BUNDLED_DEX_MIN_API) else app.minSdk
         val dexRoot = File(buildRoot, "dex")
         // Dex made with other settings is redone (each step below re-dexes an empty folder).
         val dexSettings = File(buildRoot, "dex-settings.txt")
-        if (!dexSettings.exists() || dexSettings.readText() != "min-api $dexMinApi") {
+        val dexSettingsText = "min-api $dexMinApi\ndesugar ${desugarLib?.name}\nbundle ${bundle != null}"
+        if (!dexSettings.exists() || dexSettings.readText() != dexSettingsText) {
             dexRoot.deleteRecursively()
-            dexSettings.writeText("min-api $dexMinApi")
+            dexSettings.writeText(dexSettingsText)
         }
+        val bundleClasspath = listOfNotNull(bundle?.classesJar)
         val dexFiles = mutableListOf<File>()
-        if (variant == BuildVariant.RELEASE) {
-            val rules = collectProguardFiles(buildRoot, aaptRules, app, libraryModules, userLibs)
+        // R8 only when the build type asks for it (isMinifyEnabled), as in AGP.
+        val useR8 = variant == BuildVariant.RELEASE && app.minifyEnabled
+        if (useR8) {
+            val rules = collectProguardFiles(buildRoot, aaptRules, app, libraryModules, userLibs) +
+                kspResourcesOut.walkTopDown().filter { processors.isNotEmpty() && it.isFile && it.extension == "pro" }.toList()
             // R classes skip R8: they're only constants, there are one per library package with
             // every resource in it (too big for R8 in a phone's heap), and the bundled AndroidX,
             // which R8 can't see into, uses them. R8 reads them as library classes.
@@ -427,9 +526,10 @@ class BuildEngine @Inject constructor(
                         dexOutputDir = r8Dir,
                         minSdk = dexMinApi,
                         emit = log,
-                        classpath = listOf(toolsManager.androidxClassesJar, rJar, kotlinStdlib) + compileOnlyJars,
+                        classpath = bundleClasspath + listOf(rJar, kotlinStdlib) + compileOnlyJars,
                         variant = variant,
                         proguardRulesFiles = rules,
+                        desugaredLibConfig = desugarConfig,
                     )
                 }
                 cache.markClean("r8", r8Inputs + rules)
@@ -443,11 +543,11 @@ class BuildEngine @Inject constructor(
             }
             dexFiles += DexStep.dexFiles(r8Dir)
             dexFiles += DexStep.dexFiles(rDexDir)
-            dexFiles += toolsManager.androidxClasses2Dex
+            bundle?.let { dexFiles += it.classes2Dex }
             dexFiles += stdlibDex(kotlinStdlib, dexMinApi) { line -> Log.d("BuildEngine", line) }
         } else {
-            // Debug: the app's classes, its libraries and the stdlib are dexed separately, so a
-            // code change only re-dexes the app's own classes.
+            // The app's classes, its libraries and the stdlib are dexed separately, so a code
+            // change only re-dexes the app's own classes.
             val appDexDir = File(dexRoot, "app")
             if (recompiled || DexStep.dexFiles(appDexDir).isEmpty()) {
                 step("DEX (D8)") { log ->
@@ -456,14 +556,16 @@ class BuildEngine @Inject constructor(
                         dexOutputDir = appDexDir,
                         minSdk = dexMinApi,
                         emit = log,
-                        classpath = listOfNotNull(toolsManager.androidxClassesJar, userLibs.classesJar, stdlibJar) + compileOnlyJars,
+                        classpath = bundleClasspath + listOfNotNull(userLibs.classesJar, stdlibJar) + compileOnlyJars,
+                        variant = variant,
+                        desugaredLibConfig = desugarConfig,
                     )
                 }
             }
             dexFiles += DexStep.dexFiles(appDexDir)
             // Before the dependencies: the app compiles against the bundled AndroidX, so a class
             // that's in both must resolve to the bundled copy at run time too.
-            dexFiles += toolsManager.androidxClasses2Dex
+            bundle?.let { dexFiles += it.classes2Dex }
             userLibs.classesJar?.let { libsJar ->
                 val libsDexDir = File(dexRoot, "libs")
                 if (cache.changed("dex-libs", libsJar) || DexStep.dexFiles(libsDexDir).isEmpty()) {
@@ -473,7 +575,9 @@ class BuildEngine @Inject constructor(
                             dexOutputDir = libsDexDir,
                             minSdk = dexMinApi,
                             emit = log,
-                            classpath = listOf(toolsManager.androidxClassesJar),
+                            classpath = bundleClasspath,
+                            variant = variant,
+                            desugaredLibConfig = desugarConfig,
                         )
                     }
                     cache.markClean("dex-libs", libsJar)
@@ -482,22 +586,45 @@ class BuildEngine @Inject constructor(
             }
             stdlibJar?.let { dexFiles += stdlibDex(it, dexMinApi) { line -> Log.d("BuildEngine", line) } }
         }
+        if (desugarLib != null && desugarConfig != null) {
+            val lib = desugarLib
+            step("Desugared library (L8)") { log -> dexFiles += l8Dex(lib, desugarConfig, dexMinApi, log) }
+        }
 
         // ── Step 5: Package and sign ───────────────────────────────────────
-        val apkName = if (variant == BuildVariant.RELEASE) "app-release.apk" else "app-debug.apk"
-        val signedApk = File(buildRoot, apkName)
-        val packedApk = File(buildRoot, "packed.apk")
         val assetsDirs = userLibs.assetsDirs + modules.mapNotNull { it.assetsDir }
         val nativeLibDirs = userLibs.jniDirs + modules.mapNotNull { it.jniLibsDir }
         // The dex order matters (the first copy of a class wins), and the cache sorts files.
         val dexOrder = writeIfChanged(File(buildRoot, "dex-order.txt"), dexFiles.joinToString("\n"))
         val packInputs = buildList {
             add(dexOrder)
-            add(unsignedResApk)
+            add(if (appBundle) protoResApk else unsignedResApk)
             addAll(dexFiles)
             (assetsDirs + nativeLibDirs).forEach { dir -> dir.walkTopDown().filter { it.isFile }.forEach { add(it) } }
             keystoreConfig?.let { add(File(it.keystorePath)) }
         }
+
+        if (appBundle) {
+            val signedAab = File(buildRoot, "app-release.aab")
+            if (!cache.changed("bundle", packInputs) && signedAab.exists()) {
+                emit(BuildEvent.Log("↩ Skipped bundle + sign (nothing changed)"))
+            } else {
+                val unsignedAab = File(buildRoot, "packed.aab")
+                step("Package app bundle") { log ->
+                    BundlePackager().pack(protoResApk, dexFiles, unsignedAab, log, assetsDirs, nativeLibDirs)
+                }
+                step("Sign app bundle") { log -> apkSigner.signBundle(unsignedAab, signedAab, log, keystoreConfig) }
+                unsignedAab.delete()
+                cache.markClean("bundle", packInputs)
+            }
+            emit(BuildEvent.Log("✓ App bundle ready: ${signedAab.absolutePath}"))
+            emit(BuildEvent.Success(signedAab.absolutePath, app.applicationId))
+            return
+        }
+
+        val apkName = if (variant == BuildVariant.RELEASE) "app-release.apk" else "app-debug.apk"
+        val signedApk = File(buildRoot, apkName)
+        val packedApk = File(buildRoot, "packed.apk")
         if (!cache.changed("pack+sign", packInputs) && signedApk.exists()) {
             emit(BuildEvent.Log("↩ Skipped pack + sign (nothing changed)"))
         } else {
@@ -512,14 +639,122 @@ class BuildEngine @Inject constructor(
                 )
             }
             val variantLabel = if (variant == BuildVariant.RELEASE) "release" else "debug"
-            step("Sign APK ($variantLabel, v1+v2)") { log ->
-                apkSigner.sign(packedApk, signedApk, log, keystoreConfig, variant)
+            step("Sign APK ($variantLabel)") { log ->
+                apkSigner.sign(packedApk, signedApk, log, keystoreConfig, variant, app.minSdk)
             }
             cache.markClean("pack+sign", packInputs)
         }
 
         emit(BuildEvent.Log("✓ Build successful: ${signedApk.absolutePath}"))
         emit(BuildEvent.Success(signedApk.absolutePath, app.applicationId))
+    }
+
+    /** The pre-built AndroidX set in the app's assets (see copyBuildTools). */
+    private class Bundle(
+        val classesJar: File,
+        val classes2Dex: File,
+        val resFlatDir: File,
+        val manifestEntries: File,
+        val packages: List<String>,
+    )
+
+    /**
+     * group:artifact → version of each library in the bundled AndroidX set, from
+     * androidx-versions.txt (copyBuildTools), or else from the META-INF/<group>_<artifact>.version
+     * files AndroidX jars carry (skipping the ones Gradle left unfilled).
+     */
+    private fun readBundledVersions(versionsTxt: File, jar: File): Map<String, String> {
+        if (versionsTxt.isFile) {
+            return versionsTxt.readLines().mapNotNull { line ->
+                val parts = line.trim().split(':')
+                if (parts.size == 3) "${parts[0]}:${parts[1]}" to parts[2] else null
+            }.toMap()
+        }
+        if (!jar.exists()) return emptyMap()
+        return runCatching {
+            java.util.zip.ZipFile(jar).use { zip ->
+                zip.entries().asSequence()
+                    .filter { it.name.startsWith("META-INF/") && it.name.endsWith(".version") && it.name.count { c -> c == '/' } == 1 }
+                    .mapNotNull { e ->
+                        val name = e.name.removePrefix("META-INF/").removeSuffix(".version")
+                        val group = name.substringBefore('_', "")
+                        val artifact = name.substringAfter('_', "")
+                        if (group.isEmpty() || artifact.isEmpty() || !group.contains('.')) return@mapNotNull null
+                        val version = zip.getInputStream(e).bufferedReader().readText().trim()
+                        if (version.firstOrNull()?.isDigit() != true) return@mapNotNull null
+                        "$group:$artifact" to version
+                    }
+                    .toMap()
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    /** Jars and AARs from files(...) / fileTree(...), as artifacts keyed by file and date. */
+    private fun localArtifacts(modules: List<ModuleInfo>): List<ResolvedArtifact> =
+        modules.flatMap { it.localLibs }.distinct().map { f ->
+            ResolvedArtifact(f, isAar = f.extension == "aar", coord = "local:${f.nameWithoutExtension}:${f.length()}-${f.lastModified()}")
+        }
+
+    /** The D8 desugaring configuration from desugar_jdk_libs_configuration. */
+    private fun extractDesugarConfig(configJar: File, dest: File): File? = runCatching {
+        java.util.zip.ZipFile(configJar).use { zip ->
+            val entry = zip.getEntry("META-INF/desugar/d8/desugar.json") ?: return@runCatching null
+            val text = zip.getInputStream(entry).bufferedReader().readText()
+            if (!dest.exists() || dest.readText() != text) dest.writeText(text)
+            dest
+        }
+    }.getOrNull()
+
+    /** desugar_jdk_libs dexed by L8 for [minSdk], once per library version and shared by every project. */
+    private fun l8Dex(desugarJar: File, config: File, minSdk: Int, emit: (String) -> Unit): List<File> {
+        val dir = File(context.filesDir, "dex-cache/l8-${desugarJar.nameWithoutExtension}-api$minSdk")
+        val existing = DexStep.dexFiles(dir)
+        if (existing.isNotEmpty()) return existing
+        val tmp = File(dir.parentFile, dir.name + ".tmp")
+        DexStep(toolsManager).l8(desugarJar, config, tmp, minSdk, emit)
+        dir.deleteRecursively()
+        tmp.renameTo(dir)
+        return DexStep.dexFiles(dir)
+    }
+
+    /**
+     * A symbol processor jar dexed so ART can load it in the compiler (KSP loads processors from
+     * plain jars, which ART can't run), once per artifact. Returns its read-only dex files.
+     */
+    private fun processorDex(artifact: ResolvedArtifact, emit: (String) -> Unit): List<File> {
+        val key = artifact.coord.ifEmpty { artifact.file.nameWithoutExtension }.replace(':', '_')
+        val dir = File(context.filesDir, "processor-dex/v${com.bori.core.build.steps.ProcessorRewriter.VERSION}/$key")
+        val existing = DexStep.dexFiles(dir)
+        if (existing.isNotEmpty()) return existing
+        dir.parentFile?.mkdirs()
+        val jar = if (artifact.isAar) {
+            // An AAR processor (rare) keeps its classes in classes.jar.
+            File(dir.parentFile, "$key-classes.jar").also { out ->
+                java.util.zip.ZipFile(artifact.file).use { zip ->
+                    zip.getEntry("classes.jar")?.let { e -> zip.getInputStream(e).use { i -> out.outputStream().use { i.copyTo(it) } } }
+                }
+            }
+        } else artifact.file
+        val rewritten = File(dir.parentFile, "$key-compat.jar")
+        val n = com.bori.core.build.steps.ProcessorRewriter.rewrite(jar, rewritten)
+        if (n > 0) emit("${artifact.coord}: $n class(es) adapted for Android")
+        val tmp = File(dir.parentFile, "$key.tmp")
+        DexStep(toolsManager).convert(listOf(rewritten), tmp, PROCESSOR_DEX_MIN_API, emit)
+        rewritten.delete()
+        // Android 14+ only loads dex files the app can't write to.
+        DexStep.dexFiles(tmp).forEach { it.setReadOnly() }
+        dir.deleteRecursively()
+        tmp.renameTo(dir)
+        return DexStep.dexFiles(dir)
+    }
+
+    /** View Binding classes for modules that turn it on, into [dir] (cleared first). */
+    private fun writeViewBindings(modules: List<ModuleInfo>, dir: File): List<File> {
+        dir.deleteRecursively()
+        dir.mkdirs()
+        return modules.filter { it.viewBinding && it.namespace.isNotBlank() }.flatMap { m ->
+            m.resDir?.let { ViewBindingGenerator.generate(it, m.namespace, dir) }.orEmpty()
+        }
     }
 
     /** [app] and the library modules it depends on (directly or not), dependencies first. */
@@ -742,10 +977,47 @@ class BuildEngine @Inject constructor(
     }
 
     companion object {
-        // Compose compiler that matches the pinned on-device Kotlin 1.8.22 (see core/build/build.gradle.kts).
-        private const val COMPOSE_COMPILER_VERSION = "1.4.8"
+        /** The on-device Kotlin compiler's version (kotlin-compiler-asset in gradle/libs.versions.toml). */
+        private const val KOTLIN_VERSION = "2.0.21"
+
+        /** Processor dex runs in the compiler on this device, so any API level ≥ 26 the app supports will do. */
+        private const val PROCESSOR_DEX_MIN_API = 26
+
+        /**
+         * Already on the compiler's class loader, so not dexed again for processors. sqlite-jdbc
+         * (Room's query check) is replaced by a stub there; its native library can't load on Android.
+         */
+        private val KSP_PROVIDED = setOf(
+            "com.google.devtools.ksp:symbol-processing-api",
+            "org.jetbrains.kotlin:kotlin-reflect",
+            "org.jetbrains:annotations",
+            "org.xerial:sqlite-jdbc",
+        )
+
+        /**
+         * The KSP processor for a kapt(...) / annotationProcessor(...) coordinate, for processors
+         * that ship one (the same artifact, or a sibling); null when there isn't one.
+         */
+        fun kspEquivalent(coord: String): String? {
+            val parts = coord.split(':')
+            if (parts.size < 3) return null
+            val (group, artifact, version) = parts
+            return when ("$group:$artifact") {
+                "androidx.room:room-compiler", "com.google.dagger:dagger-compiler", "com.google.dagger:hilt-compiler",
+                "androidx.hilt:hilt-compiler", "com.squareup.moshi:moshi-kotlin-codegen" -> coord
+                "com.google.dagger:hilt-android-compiler" -> "com.google.dagger:hilt-compiler:$version"
+                "com.github.bumptech.glide:compiler" -> "com.github.bumptech.glide:ksp:$version"
+                else -> null
+            }
+        }
 
         /** The --min-api copyBuildTools dexes androidx-classes2.dex with. */
         private const val BUNDLED_DEX_MIN_API = 21
+
+        /** androidx.databinding:viewbinding, which AGP adds for View Binding (its version follows AGP's). */
+        private const val VIEWBINDING_VERSION = "8.7.3"
+
+        /** Used when isCoreLibraryDesugaringEnabled is on without a coreLibraryDesugaring(...) line. */
+        private const val DESUGAR_JDK_LIBS_VERSION = "2.1.3"
     }
 }

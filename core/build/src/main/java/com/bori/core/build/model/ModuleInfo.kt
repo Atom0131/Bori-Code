@@ -36,4 +36,26 @@ data class ModuleInfo(
     val manifest: File?,
     /** proguardFiles(...) of the app module and consumerProguardFiles(...) of libraries, that exist. */
     val proguardFiles: List<File>,
-)
+    /** platform(...) / enforcedPlatform(...) BOM coordinates; they give versions to coordinates without one. */
+    val platformDeps: List<String> = emptyList(),
+    /** Jars and AARs from files(...) and fileTree(...). */
+    val localLibs: List<File> = emptyList(),
+    /** compileOptions { isCoreLibraryDesugaringEnabled = true }, with the coreLibraryDesugaring(...) coordinates. */
+    val coreLibraryDesugaring: Boolean = false,
+    val desugarLibs: List<String> = emptyList(),
+    /** buildFeatures { viewBinding = true } (or the older viewBinding { enabled = true }). */
+    val viewBinding: Boolean = false,
+    /** This build type's isMinifyEnabled / minifyEnabled (AGP's default is off). */
+    val minifyEnabled: Boolean = false,
+    /** Gradle plugin ids the module applies (plugins {}, apply plugin:, catalog aliases resolved). */
+    val pluginIds: Set<String> = emptySet(),
+    /** buildFeatures { compose = true }. */
+    val composeFeature: Boolean = false,
+    /** `ksp { arg("key", "value") }` processor options. */
+    val kspArgs: Map<String, String> = emptyMap(),
+) {
+    val composeEnabled: Boolean get() = "org.jetbrains.kotlin.plugin.compose" in pluginIds || composeFeature
+    val serializationPlugin: Boolean get() = pluginIds.any { it.endsWith("plugin.serialization") || it == "kotlinx-serialization" }
+    val parcelizePlugin: Boolean get() = pluginIds.any { it.endsWith("plugin.parcelize") || it == "kotlin-parcelize" }
+    val hiltPlugin: Boolean get() = pluginIds.any { it == "com.google.dagger.hilt.android" || it == "dagger.hilt.android.plugin" }
+}

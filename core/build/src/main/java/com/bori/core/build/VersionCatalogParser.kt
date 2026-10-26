@@ -13,6 +13,8 @@ object VersionCatalogParser {
         val libraries: Map<String, String>,
         val bundles: Map<String, List<String>>,
         val versions: Map<String, String>,
+        /** Plugin alias → plugin id, from [plugins]. */
+        val plugins: Map<String, String> = emptyMap(),
     ) {
         /** Coordinates for a `libs.X` reference (X without "libs."): one library, or every member of `bundles.X`. */
         fun resolve(ref: String): List<String> {
@@ -24,6 +26,9 @@ object VersionCatalogParser {
         /** The version for a `libs.versions.X` reference (X without "libs.versions."). */
         fun version(ref: String): String? = versions[normalise(ref)]
 
+        /** The plugin id for a `libs.plugins.X` reference (X without "libs.plugins."). */
+        fun plugin(ref: String): String? = plugins[normalise(ref)]
+
         companion object {
             val EMPTY = Catalog(emptyMap(), emptyMap(), emptyMap())
         }
@@ -34,7 +39,7 @@ object VersionCatalogParser {
         val text = tomlFile.readText()
         val versions = parseVersions(text)
         val libraries = parseLibraries(text, versions)
-        return Catalog(libraries, parseBundles(text, libraries), versions)
+        return Catalog(libraries, parseBundles(text, libraries), versions, parsePlugins(text))
     }
 
     /**
@@ -79,7 +84,8 @@ object VersionCatalogParser {
             } else {
                 Regex("""["']([^"']+)["']""").find(value)?.groupValues?.get(1)
             } ?: continue
-            if (coord.count { it == ':' } == 2) result[normalise(key)] = coord
+            // Two parts ("group:name") when a platform(...) BOM supplies the version.
+            if (coord.count { it == ':' } in 1..2) result[normalise(key)] = coord
         }
         return result
     }
@@ -93,8 +99,21 @@ object VersionCatalogParser {
         val inlineVersion = Regex("""version\s*=\s*["']([^"']+)["']""").find(value)?.groupValues?.get(1)
             ?: Regex("""(?:strictly|require|prefer)\s*=\s*["']([^"']+)["']""").find(value)?.groupValues?.get(1)
         val versionRef = Regex("""version\.ref\s*=\s*["']([^"']+)["']""").find(value)?.groupValues?.get(1)
-        val version = inlineVersion ?: versions[versionRef?.let { normalise(it) }] ?: return null
+        val version = inlineVersion ?: versions[versionRef?.let { normalise(it) }] ?: return "$group:$name"
         return "$group:$name:$version"
+    }
+
+    private fun parsePlugins(text: String): Map<String, String> {
+        val section = extractSection(text, "plugins") ?: return emptyMap()
+        val result = mutableMapOf<String, String>()
+        for (line in section.lines()) {
+            val (key, value) = parseKV(line) ?: continue
+            val id = Regex("""id\s*=\s*["']([^"']+)["']""").find(value)?.groupValues?.get(1)
+                ?: Regex("""^["']([^"':]+)""").find(value)?.groupValues?.get(1)
+                ?: continue
+            result[normalise(key)] = id
+        }
+        return result
     }
 
     private fun parseBundles(text: String, libraries: Map<String, String>): Map<String, List<String>> {

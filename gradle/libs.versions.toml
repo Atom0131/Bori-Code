@@ -17,7 +17,9 @@ navigationCompose = "2.8.4"
 soraEditor = "0.23.4"
 composeMarkdown = "0.5.4"
 ecj = "4.6.1"
-kotlin-compiler-asset = "1.8.22"
+kotlin-compiler-asset = "2.0.21"
+# KSP1 matching kotlin-compiler-asset (bundled pre-dexed for on-device symbol processing)
+ksp-asset = "2.0.21-1.0.28"
 bouncycastle = "1.78.1"
 jgit = "6.10.0.202406032230-r"
 litertlm = "0.16.1"
@@ -102,6 +104,8 @@ kotlin-reflect-asset = { group = "org.jetbrains.kotlin", name = "kotlin-reflect"
 # BouncyCastle (APK signing)
 bcprov = { group = "org.bouncycastle", name = "bcprov-jdk15to18", version.ref = "bouncycastle" }
 bcpkix = { group = "org.bouncycastle", name = "bcpkix-jdk15to18", version.ref = "bouncycastle" }
+apksig = { group = "com.android.tools.build", name = "apksig", version.ref = "agp" }
+asm = { group = "org.ow2.asm", name = "asm", version = "9.7.1" }
 
 # JGit (pure Java — no native binary required on Android)
 jgit = { group = "org.eclipse.jgit", name = "org.eclipse.jgit", version.ref = "jgit" }

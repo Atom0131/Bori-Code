@@ -25,6 +25,7 @@ class LibraryExtractStep(private val context: Context, private val toolsDir: Fil
     val androidxResCompiledZip: File get() = File(toolsDir, "androidx-res-compiled.zip")
     val androidxPackagesTxt: File get() = File(toolsDir, "androidx-packages.txt")
     val androidxManifestEntriesXml: File get() = File(toolsDir, "androidx-manifest-entries.xml")
+    val androidxVersionsTxt: File get() = File(toolsDir, "androidx-versions.txt")
 
     /** Directory containing all pre-compiled .flat resource files extracted from the ZIP. */
     val androidxResFlatDir: File get() = File(toolsDir, "androidx-res-flat")
@@ -78,6 +79,7 @@ class LibraryExtractStep(private val context: Context, private val toolsDir: Fil
             "androidx-res-compiled.zip",
             "androidx-packages.txt",
             "androidx-manifest-entries.xml",
+            "androidx-versions.txt",
         )
     }
 }

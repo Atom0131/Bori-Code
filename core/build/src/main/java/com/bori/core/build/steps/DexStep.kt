@@ -29,6 +29,7 @@ class DexStep(private val tools: ToolsManager) {
         classpath: List<File> = emptyList(),
         variant: BuildVariant = BuildVariant.DEBUG,
         proguardRulesFiles: List<File> = emptyList(),
+        desugaredLibConfig: File? = null,
     ) {
         val programFiles = inputs.filter { it.exists() }.flatMap { input ->
             if (input.isDirectory) input.walkTopDown().filter { it.isFile && it.extension == "class" }.toList()
@@ -47,17 +48,13 @@ class DexStep(private val tools: ToolsManager) {
         dexOutputDir.deleteRecursively()
         dexOutputDir.mkdirs()
 
-        try {
-            val loader = PathClassLoader(tools.d8Jar.absolutePath, ClassLoader.getSystemClassLoader())
-            val entryClass = if (useR8) "com.android.tools.r8.R8" else "com.android.tools.r8.D8"
-            val toolClass = loader.loadClass(entryClass)
-            val mainMethod = toolClass.getMethod("main", Array<String>::class.java)
-
-            val args = buildList {
+        val args = buildList {
                 add("--output"); add(dexOutputDir.absolutePath)
                 add("--min-api"); add(minSdk.toString())
                 add(if (variant == BuildVariant.RELEASE) "--release" else "--debug")
                 add("--lib"); add(tools.androidStubs.absolutePath)
+                // java.time & co. below their API level go through desugar_jdk_libs (dexed by [l8]).
+                desugaredLibConfig?.takeIf { it.exists() }?.let { add("--desugared-lib"); add(it.absolutePath) }
                 // Classpath, not library, for R8 too: those classes are desugared like the
                 // program (library classes are assumed to keep their default methods).
                 for (jar in classpath.filter { it.exists() }) {
@@ -74,6 +71,40 @@ class DexStep(private val tools: ToolsManager) {
                 }
                 addAll(programFiles)
             }.toTypedArray()
+        run(if (useR8) "com.android.tools.r8.R8" else "com.android.tools.r8.D8", toolName, args, emit)
+    }
+
+    /**
+     * Dexes the `desugar_jdk_libs` jar with L8 for [minSdk], into [dexOutputDir]: the library
+     * implementations (java.time, streams…) that D8 rewrote calls to with [desugaredLibConfig].
+     */
+    fun l8(desugarJar: File, desugaredLibConfig: File, dexOutputDir: File, minSdk: Int, emit: (String) -> Unit) {
+        dexOutputDir.deleteRecursively()
+        dexOutputDir.mkdirs()
+        emit("L8: dexing ${desugarJar.name} for API $minSdk")
+        val args = arrayOf(
+            "--output", dexOutputDir.absolutePath,
+            "--min-api", minSdk.toString(),
+            "--release",
+            "--lib", tools.androidStubs.absolutePath,
+            "--desugared-lib", desugaredLibConfig.absolutePath,
+            desugarJar.absolutePath,
+        )
+        run("com.android.tools.r8.L8", "L8", args, emit)
+    }
+
+    private fun run(entryClass: String, toolName: String, args: Array<String>, emit: (String) -> Unit) {
+        try {
+            val loader = PathClassLoader(tools.d8Jar.absolutePath, ClassLoader.getSystemClassLoader())
+            val toolClass = loader.loadClass(entryClass)
+            // Through the command API, not main(): main() calls System.exit on a compile error,
+            // which would end Bori Code itself. run() throws CompilationFailedException instead.
+            val commandClass = loader.loadClass(entryClass + "Command")
+            val originClass = loader.loadClass("com.android.tools.r8.origin.Origin")
+            val builder = commandClass.getMethod("parse", Array<String>::class.java, originClass)
+                .invoke(null, args, originClass.getMethod("root").invoke(null))!!
+            val command = builder.javaClass.getMethod("build").invoke(builder)
+            val runMethod = toolClass.getMethod("run", commandClass)
 
             // D8/R8 print their errors (duplicate classes, missing classes…) to stderr, so capture
             // it for the build log. System.err is process-wide; nothing else writes it during a build.
@@ -81,7 +112,7 @@ class DexStep(private val tools: ToolsManager) {
             val originalErr = System.err
             val executor = Executors.newSingleThreadExecutor()
             System.setErr(java.io.PrintStream(captured, true))
-            val future = executor.submit<Unit> { mainMethod.invoke(null, args as Any) }
+            val future = executor.submit<Unit> { runMethod.invoke(null, command) }
 
             val startMs = System.currentTimeMillis()
             val heartbeatEx = Executors.newSingleThreadScheduledExecutor()
@@ -113,8 +144,9 @@ class DexStep(private val tools: ToolsManager) {
             throw e
         } catch (e: Throwable) {
             val root = (e as? java.util.concurrent.ExecutionException)?.cause?.let { (it as? java.lang.reflect.InvocationTargetException)?.targetException ?: it } ?: e
-            val message = when (root) {
-                is OutOfMemoryError -> "$toolName: Out of Memory. The project is too large for on-device dexing."
+            val message = when {
+                root is OutOfMemoryError -> "$toolName: Out of Memory. The project is too large for on-device dexing."
+                root.javaClass.simpleName == "CompilationFailedException" -> "$toolName failed: see the $toolName errors above"
                 else -> "$toolName failed: ${root.message ?: root.javaClass.simpleName}"
             }
             throw RuntimeException(message, e)

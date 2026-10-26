@@ -1,3 +1,6 @@
+import java.net.URI
+import java.nio.file.FileSystems
+import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
@@ -32,9 +35,12 @@ val pinnedBuildTools = "37.0.0"
 val generatedAssetNames = listOf(
     "d8.jar", "android-stubs.jar", "core-lambda-stubs.jar",
     "kotlinc.jar", "kotlin-stdlib.jar", "kotlin-stdlib-dex.jar", "kotlin-reflect-dex.jar", "trove4j-dex.jar",
-    "swing-stubs-dex.jar", "jetbrains-annotations-dex.jar",
+    "swing-stubs-dex.jar", "jetbrains-annotations-dex.jar", "kotlinx-coroutines-dex.jar",
+    // Kotlin compiler plugins and KSP, pre-dexed (dex + the original entries, for META-INF/services)
+    "compose-plugin.jar", "serialization-plugin.jar", "parcelize-plugin.jar",
+    "ksp-plugin.jar", "ksp-api.jar", "ksp-deps-dex.jar", "java-compiler-api-dex.jar", "processor-stubs-dex.jar",
     "androidx-classes.jar", "androidx-classes2.dex", "androidx-res-compiled.zip",
-    "androidx-packages.txt", "androidx-manifest-entries.xml",
+    "androidx-packages.txt", "androidx-manifest-entries.xml", "androidx-versions.txt",
 )
 
 // Reads the Android SDK path from local.properties or environment.
@@ -227,14 +233,115 @@ fun patchCacheKt(classBytes: ByteArray): ByteArray {
 }
 
 /** Copies src JAR to dest, patching every .class entry through patchClassIfNeeded. */
-fun patchKotlinCompilerJar(src: File, dest: File): List<String> {
+/**
+ * Compiles the classes in stubs/art-replacements (Java 8 bytecode) and returns them by jar entry
+ * name. They replace same-named compiler classes that can't work on ART as shipped.
+ */
+fun compileArtReplacements(srcDir: File, outDir: File): Map<String, ByteArray> {
+    val sources = srcDir.walkTopDown().filter { it.isFile && it.extension == "java" }.toList()
+    if (sources.isEmpty()) return emptyMap()
+    outDir.deleteRecursively()
+    outDir.mkdirs()
+    val javac = javax.tools.ToolProvider.getSystemJavaCompiler() ?: error("copyBuildTools needs a JDK (javac) to run Gradle")
+    val args = listOf("-source", "8", "-target", "8", "-nowarn", "-Xlint:-options", "-d", outDir.absolutePath) + sources.map { it.absolutePath }
+    check(javac.run(null, null, null, *args.toTypedArray()) == 0) { "Compiling ${srcDir.name} failed" }
+    return outDir.walkTopDown().filter { it.isFile && it.extension == "class" }
+        .associate { it.relativeTo(outDir).invariantSeparatorsPath to it.readBytes() }
+}
+
+/**
+ * Points calls to JDK methods Android lacks at com.bori.compat.ProcessorCompat (in
+ * processor-stubs-dex.jar, on the compiler's class loader). Same mapping as the app's
+ * ProcessorRewriter, which does this for downloaded symbol processors. Null when unchanged.
+ */
+fun retargetCompatCalls(classBytes: ByteArray): ByteArray? {
+    val text = String(classBytes, Charsets.ISO_8859_1)
+    if (listOf("trySetAccessible", "java/beans/Introspector", "java/awt/EventQueue").none { it in text }) return null
+    val compat = "com/bori/compat/ProcessorCompat"
+    val reflectionOwners = setOf("java/lang/reflect/AccessibleObject", "java/lang/reflect/Constructor",
+        "java/lang/reflect/Method", "java/lang/reflect/Field", "java/lang/reflect/Executable")
+    val statics = mapOf(
+        "java/beans/Introspector.decapitalize(Ljava/lang/String;)Ljava/lang/String;" to "decapitalize",
+        "java/awt/EventQueue.isDispatchThread()Z" to "isDispatchThread",
+        "java/awt/EventQueue.invokeLater(Ljava/lang/Runnable;)V" to "invokeLater",
+        "java/awt/EventQueue.invokeAndWait(Ljava/lang/Runnable;)V" to "invokeAndWait",
+    )
+    val reader = ClassReader(classBytes)
+    val writer = ClassWriter(reader, 0)
+    var touched = false
+    reader.accept(object : org.objectweb.asm.ClassVisitor(Opcodes.ASM9, writer) {
+        override fun visitMethod(access: Int, name: String?, descriptor: String?, signature: String?, exceptions: Array<out String>?): org.objectweb.asm.MethodVisitor {
+            val mv = super.visitMethod(access, name, descriptor, signature, exceptions)
+            return object : org.objectweb.asm.MethodVisitor(Opcodes.ASM9, mv) {
+                override fun visitMethodInsn(opcode: Int, owner: String, name: String, desc: String, isInterface: Boolean) {
+                    val static = statics["$owner.$name$desc"]
+                    when {
+                        opcode == Opcodes.INVOKEVIRTUAL && owner in reflectionOwners && name == "trySetAccessible" && desc == "()Z" -> {
+                            touched = true
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, compat, "trySetAccessible", "(Ljava/lang/reflect/AccessibleObject;)Z", false)
+                        }
+                        opcode == Opcodes.INVOKESTATIC && static != null -> {
+                            touched = true
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, compat, static, desc, false)
+                        }
+                        else -> super.visitMethodInsn(opcode, owner, name, desc, isInterface)
+                    }
+                }
+            }
+        }
+    }, 0)
+    return if (touched) writer.toByteArray() else null
+}
+
+/** Copies [src] to [dest] with retargetCompatCalls applied; returns the classes it changed. */
+fun retargetCompatJar(src: File, dest: File): List<String> {
+    val changed = mutableListOf<String>()
+    ZipFile(src).use { zip ->
+        ZipOutputStream(dest.outputStream().buffered()).use { zos ->
+            for (entry in zip.entries()) {
+                if (entry.isDirectory) continue
+                val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                val out = if (entry.name.endsWith(".class")) retargetCompatCalls(bytes)?.also { changed += entry.name } ?: bytes else bytes
+                zos.putNextEntry(ZipEntry(entry.name))
+                zos.write(out)
+                zos.closeEntry()
+            }
+        }
+    }
+    return changed
+}
+
+/**
+ * JDK 21's SourceVersion works out the latest release with Runtime.version(), which Android
+ * doesn't have, so the class fails to load. Its getLatestSupported() returns RELEASE_17 instead.
+ */
+fun patchSourceVersion(classBytes: ByteArray): ByteArray {
+    val reader = ClassReader(classBytes)
+    val node = ClassNode()
+    reader.accept(node, 0)
+    val method = node.methods.firstOrNull { it.name == "getLatestSupported" && it.desc == "()Ljavax/lang/model/SourceVersion;" }
+        ?: return classBytes
+    method.instructions.clear()
+    method.tryCatchBlocks?.clear()
+    method.localVariables?.clear()
+    method.instructions.add(org.objectweb.asm.tree.FieldInsnNode(Opcodes.GETSTATIC, "javax/lang/model/SourceVersion", "RELEASE_17", "Ljavax/lang/model/SourceVersion;"))
+    method.instructions.add(InsnNode(Opcodes.ARETURN))
+    val writer = ClassWriter(ClassWriter.COMPUTE_MAXS)
+    node.accept(writer)
+    return writer.toByteArray()
+}
+
+fun patchKotlinCompilerJar(src: File, dest: File, replacements: Map<String, ByteArray> = emptyMap()): List<String> {
     val patched = mutableListOf<String>()
     ZipInputStream(src.inputStream().buffered()).use { zin ->
         ZipOutputStream(dest.outputStream().buffered()).use { zout ->
             var entry = zin.nextEntry
             while (entry != null) {
                 val bytes = zin.readBytes()
-                val out = if (entry.name.endsWith(".class")) {
+                val out = if (entry.name in replacements) {
+                    patched.add(entry.name + " (replaced)")
+                    replacements.getValue(entry.name)
+                } else if (entry.name.endsWith(".class")) {
                     var fixed = patchClassIfNeeded(bytes)
                     if (entry.name == "org/jetbrains/kotlin/com/intellij/ide/plugins/PluginManagerCore.class") {
                         fixed = patchPluginManagerCore(fixed)
@@ -242,6 +349,7 @@ fun patchKotlinCompilerJar(src: File, dest: File): List<String> {
                     if (entry.name == "org/jetbrains/kotlin/container/CacheKt.class") {
                         fixed = patchCacheKt(fixed)
                     }
+                    retargetCompatCalls(fixed)?.let { fixed = it }
                     if (fixed !== bytes) patched.add(entry.name)
                     fixed
                 } else bytes
@@ -260,6 +368,8 @@ tasks.register("copyBuildTools") {
     // Declared inputs/outputs let Gradle skip this (slow) task when nothing changed,
     // instead of regenerating every asset on every build.
     inputs.files(configurations.named("buildToolsJars"), configurations.named("androidxLibs"))
+    inputs.dir("stubs/art-replacements")
+    inputs.dir("stubs/processor-stubs")
     inputs.file("stubs/swing-stubs.jar")
     inputs.property("compileSdk", pinnedCompileSdk)
     inputs.property("buildTools", pinnedBuildTools)
@@ -374,7 +484,8 @@ tasks.register("copyBuildTools") {
         // sun.misc.Unsafe.getAndAddInt in try-catch(Throwable) so Android 15's
         // blocked hidden-API enforcement doesn't cause ExceptionInInitializerError.
         val patchedKotlinc = File(buildDir, "patched_kotlinc_embeddable.jar")
-        val patchedClasses = patchKotlinCompilerJar(kotlincSrc, patchedKotlinc)
+        val artReplacements = compileArtReplacements(file("stubs/art-replacements"), File(buildDir, "art-replacements"))
+        val patchedClasses = patchKotlinCompilerJar(kotlincSrc, patchedKotlinc, artReplacements)
         logger.lifecycle("Patched kotlinc: modified ${patchedClasses.size} class(es): $patchedClasses")
         dexWithServices(patchedKotlinc, File(assetsDir, "kotlinc.jar"))
         logger.lifecycle("Pre-dexed kotlinc.jar with services (patched)")
@@ -449,6 +560,110 @@ tasks.register("copyBuildTools") {
         }
         logger.lifecycle("Pre-dexed jetbrains-annotations-dex.jar")
 
+        // kotlinx-coroutines: Kotlin 2.x's compiler (incremental compilation) needs it at run time.
+        val coroutinesSrc = artifacts.first { it.name == "kotlinx-coroutines-core-jvm" }.file
+        exec {
+            commandLine(
+                javaExe, "-cp", sdkD8Jar.absolutePath,
+                "com.android.tools.r8.D8",
+                "--output", File(assetsDir, "kotlinx-coroutines-dex.jar").absolutePath,
+                "--min-api", "26",
+                "--lib", androidJar.absolutePath,
+                coroutinesSrc.absolutePath,
+            )
+        }
+        logger.lifecycle("Pre-dexed kotlinx-coroutines-dex.jar from ${coroutinesSrc.name}")
+
+        // Compiler plugins and KSP, shipped with the app instead of downloaded at build time:
+        // the app may not download code to run itself (Google Play policy), and these run inside
+        // the on-device compiler. Each keeps its original entries for -Xplugin's service lookup.
+        for ((artifactName, assetName) in listOf(
+            "kotlin-compose-compiler-plugin-embeddable" to "compose-plugin.jar",
+            "kotlin-serialization-compiler-plugin-embeddable" to "serialization-plugin.jar",
+            "kotlin-parcelize-compiler" to "parcelize-plugin.jar",
+            "symbol-processing" to "ksp-plugin.jar",
+            "symbol-processing-api" to "ksp-api.jar",
+        )) {
+            val original = artifacts.first { it.name == artifactName }.file
+            val adapted = File(buildDir, "compat_${original.name}")
+            val changed = retargetCompatJar(original, adapted)
+            if (changed.isNotEmpty()) logger.lifecycle("Retargeted JDK calls in ${changed.size} class(es) of $artifactName")
+            dexWithServices(adapted, File(assetsDir, assetName))
+            logger.lifecycle("Pre-dexed $assetName")
+        }
+        // KSP's own runtime dependencies (kotlinx-serialization).
+        exec {
+            commandLine(
+                listOf(javaExe, "-cp", sdkD8Jar.absolutePath, "com.android.tools.r8.D8",
+                    "--output", File(assetsDir, "ksp-deps-dex.jar").absolutePath,
+                    "--min-api", "26", "--lib", androidJar.absolutePath) +
+                    artifacts.filter { it.name.startsWith("kotlinx-serialization-") }.map { it.file.absolutePath }
+            )
+        }
+        logger.lifecycle("Pre-dexed ksp-deps-dex.jar")
+
+        // JDK API classes Android lacks (GPLv2 with the Classpath Exception):
+        // - javax.lang.model / javax.annotation.processing / javax.tools (java.compiler): JavaPoet,
+        //   which Room, Dagger and Hilt generate code with, uses them;
+        // - six javax.xml.stream interfaces (java.xml): the Kotlin 2 compiler reads its plugin
+        //   descriptors with the StAX parser it bundles (Aalto), which implements them.
+        val javaCompilerApi = File(buildDir, "java-compiler-api.jar")
+        val jrt = FileSystems.getFileSystem(URI.create("jrt:/"))
+        val staxApi = listOf("Location", "XMLReporter", "XMLResolver", "XMLStreamConstants", "XMLStreamException", "XMLStreamReader")
+        ZipOutputStream(javaCompilerApi.outputStream().buffered()).use { zos ->
+            val moduleRoot = jrt.getPath("/modules/java.compiler")
+            Files.walk(moduleRoot).use { paths ->
+                paths.filter { p -> p.toString().endsWith(".class") && !p.toString().endsWith("module-info.class") }
+                    .sorted()
+                    .forEach { path ->
+                        val name = moduleRoot.relativize(path).toString()
+                        zos.putNextEntry(ZipEntry(name))
+                        val bytes = Files.readAllBytes(path)
+                        zos.write(if (name == "javax/lang/model/SourceVersion.class") patchSourceVersion(bytes) else bytes)
+                        zos.closeEntry()
+                    }
+            }
+            for (name in staxApi) {
+                zos.putNextEntry(ZipEntry("javax/xml/stream/$name.class"))
+                Files.newInputStream(jrt.getPath("/modules/java.xml/javax/xml/stream/$name.class")).use { input -> input.copyTo(zos) }
+                zos.closeEntry()
+            }
+        }
+        exec {
+            commandLine(
+                javaExe, "-cp", sdkD8Jar.absolutePath,
+                "com.android.tools.r8.D8",
+                "--output", File(assetsDir, "java-compiler-api-dex.jar").absolutePath,
+                "--min-api", "26",
+                "--lib", androidJar.absolutePath,
+                javaCompilerApi.absolutePath,
+            )
+        }
+        logger.lifecycle("Pre-dexed java-compiler-api-dex.jar (JDK java.compiler + StAX API)")
+
+        // Stand-ins that symbol processors load ahead of their own dependencies (stubs/processor-stubs).
+        val processorStubsDir = File(buildDir, "processor-stubs")
+        val processorStubs = compileArtReplacements(file("stubs/processor-stubs"), processorStubsDir)
+        val processorStubsJar = File(buildDir, "processor-stubs.jar")
+        ZipOutputStream(processorStubsJar.outputStream().buffered()).use { zos ->
+            processorStubs.toSortedMap().forEach { (name, bytes) ->
+                zos.putNextEntry(ZipEntry(name))
+                zos.write(bytes)
+                zos.closeEntry()
+            }
+        }
+        exec {
+            commandLine(
+                javaExe, "-cp", sdkD8Jar.absolutePath,
+                "com.android.tools.r8.D8",
+                "--output", File(assetsDir, "processor-stubs-dex.jar").absolutePath,
+                "--min-api", "26",
+                "--lib", androidJar.absolutePath,
+                processorStubsJar.absolutePath,
+            )
+        }
+        logger.lifecycle("Pre-dexed processor-stubs-dex.jar (${processorStubs.size} class(es))")
+
         // ---- AndroidX library bundle ----
         logger.lifecycle("Building AndroidX library bundle (this may take a few minutes)...")
         val androidxWorkDir = File(buildDir, "androidx_bundle_work")
@@ -457,6 +672,14 @@ tasks.register("copyBuildTools") {
 
         val allClassesJars = mutableListOf<File>()
         val aarExtractDirs = mutableListOf<File>()
+
+        // group:artifact:version of every bundled library, so the builder can tell when a project
+        // needs a newer one (the jars' own META-INF/*.version files aren't always filled in).
+        File(assetsDir, "androidx-versions.txt").writeText(
+            androidxLibs.resolvedConfiguration.resolvedArtifacts
+                .map { "${it.moduleVersion.id.group}:${it.moduleVersion.id.name}:${it.moduleVersion.id.version}" }
+                .distinct().sorted().joinToString("\n")
+        )
 
         // Resolve all AndroidX artifacts. A bare configuration (no consumer attributes) should
         // return raw .aar files for Android libraries. We handle both .aar and .jar defensively.
@@ -769,10 +992,20 @@ dependencies {
     buildToolsJars(libs.kotlin.reflect.asset)
     buildToolsJars(libs.trove4j)
     buildToolsJars("org.jetbrains:annotations:13.0")
+    val kotlinAsset = libs.versions.kotlin.compiler.asset.get()
+    buildToolsJars("org.jetbrains.kotlin:kotlin-compose-compiler-plugin-embeddable:$kotlinAsset")
+    buildToolsJars("org.jetbrains.kotlin:kotlin-serialization-compiler-plugin-embeddable:$kotlinAsset")
+    buildToolsJars("org.jetbrains.kotlin:kotlin-parcelize-compiler:$kotlinAsset")
+    buildToolsJars("com.google.devtools.ksp:symbol-processing:${libs.versions.ksp.asset.get()}")
+    buildToolsJars("com.google.devtools.ksp:symbol-processing-api:${libs.versions.ksp.asset.get()}")
 
     // BouncyCastle for APK signing (v1 JAR signing / PKCS7)
     implementation(libs.bcprov)
     implementation(libs.bcpkix)
+    // APK Signature Scheme v1-v3 (Apache-2.0), compiled into the app itself
+    implementation(libs.apksig)
+    // Rewrites symbol processors' calls to JDK methods Android lacks (BSD-3-Clause)
+    implementation(libs.asm)
 
     // AndroidX library bundle — resolved by copyBuildTools to generate pre-processed assets.
     // NOT on the runtime classpath; libraries are bundled as assets (androidx-classes.jar etc.)
