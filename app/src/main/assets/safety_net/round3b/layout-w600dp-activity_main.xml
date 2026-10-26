@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:padding="8dp"
+    android:background="#1a1a2e">
+
+    <TextView
+        android:id="@+id/display"
+        style="@style/CalcDisplay"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:layout_marginEnd="8dp"
+        android:text="0" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+            <Button android:id="@+id/btnClear" style="@style/ActionButton" android:text="C" />
+            <Button android:id="@+id/btnDiv" style="@style/OperatorButton" android:text="÷" />
+            <Button android:id="@+id/btnMul" style="@style/OperatorButton" android:text="×" />
+            <Button android:id="@+id/btnSub" style="@style/OperatorButton" android:text="−" />
+        </LinearLayout>
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+            <Button android:id="@+id/btn7" style="@style/DigitButton" android:text="7" />
+            <Button android:id="@+id/btn8" style="@style/DigitButton" android:text="8" />
+            <Button android:id="@+id/btn9" style="@style/DigitButton" android:text="9" />
+            <Button android:id="@+id/btnAdd" style="@style/OperatorButton" android:text="+" />
+        </LinearLayout>
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+            <Button android:id="@+id/btn4" style="@style/DigitButton" android:text="4" />
+            <Button android:id="@+id/btn5" style="@style/DigitButton" android:text="5" />
+            <Button android:id="@+id/btn6" style="@style/DigitButton" android:text="6" />
+            <Button android:id="@+id/btnEquals" style="@style/ActionButton" android:text="=" />
+        </LinearLayout>
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+            <Button android:id="@+id/btn1" style="@style/DigitButton" android:text="1" />
+            <Button android:id="@+id/btn2" style="@style/DigitButton" android:text="2" />
+            <Button android:id="@+id/btn3" style="@style/DigitButton" android:text="3" />
+            <Button android:id="@+id/btnDot" style="@style/DigitButton" android:text="." />
+        </LinearLayout>
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+            <Button android:id="@+id/btn0" style="@style/DigitButton" android:text="0" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

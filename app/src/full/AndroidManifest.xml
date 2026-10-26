@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The full build only: the Linux environment, which Play doesn't allow. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Keeps a Linux distro or coding CLI install going while the app is in the background -->
+        <service
+            android:name="com.bori.app.service.LinuxInstallService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
+</manifest>

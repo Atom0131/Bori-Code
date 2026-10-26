@@ -1,0 +1,213 @@
+KOTLIN ON-DEVICE COMPILER PIPELINE — FIX LOG
+============================================
+
+This document summarizes every fix applied to make the Kotlin compiler work
+on Android (ARM/ART) in Bori Code. Fixes are listed in the order they were applied.
+Each entry shows what crashed, why, and what changed.
+
+
+──────────────────────────────────────────────────────────────────────────────
+1. Removed "Empty Activity (Kotlin)" template from NewProjectDialog
+──────────────────────────────────────────────────────────────────────────────
+File: app/src/main/java/com/bori/app/ui/projects/NewProjectDialog.kt
+
+The template chip for EMPTY_ACTIVITY_KOTLIN was removed from the UI.
+The enum value still exists in ProjectTemplate; only the UI entry was hidden.
+Remaining templates: Empty Activity (Java), Basic Activity (Java),
+                     Basic Activity (Kotlin).
+
+
+──────────────────────────────────────────────────────────────────────────────
+2. Fixed extractPluginsDir() cache bug
+──────────────────────────────────────────────────────────────────────────────
+File: core/build/src/main/java/com/bori/core/build/KotlinCompilerDaemon.kt
+
+Bug: cachedPluginsDir returned a stale path after APK reinstall deleted
+toolsDir. The cache check only compared paths, never verified the file
+still existed on disk.
+
+Fix: Added xmlTarget.exists() to the cache check. Now the cache is only
+used if the extracted compiler.xml is actually present.
+
+Before: if (it == pluginsDir) return pluginsDir
+After:  if (it == pluginsDir && xmlTarget.exists()) return pluginsDir
+
+
+──────────────────────────────────────────────────────────────────────────────
+3. Broadened fallback in compileWithIncrementalApi()
+──────────────────────────────────────────────────────────────────────────────
+File: core/build/src/main/java/com/bori/core/build/KotlinCompilerDaemon.kt
+
+Bug: makeIncrementally() failures only fell back to exec() for
+NoSuchMethodException. Other initialization errors (e.g. ExceptionIn-
+InitializerError) propagated uncaught and failed the build.
+
+Fix: Changed the catch block to catch all InvocationTargetException,
+unwrap the root cause, log it, then fall back to exec().
+
+
+──────────────────────────────────────────────────────────────────────────────
+4. ToolsManager.prepare() now returns Boolean
+──────────────────────────────────────────────────────────────────────────────
+File: core/build/src/main/java/com/bori/core/build/tools/ToolsManager.kt
+      core/build/src/main/java/com/bori/core/build/BuildEngine.kt
+
+Bug: After a fresh APK install (which triggers full tool re-extraction),
+the Kotlin compiler daemon still held a stale warm instance pointing to
+the old kotlinc.jar path, and the IC cache was stale.
+
+Fix: prepare() now returns true when tools were re-extracted. BuildEngine
+uses this signal to clear the daemon cache and delete the kotlin-ic-cache/
+directory before starting compilation.
+
+
+──────────────────────────────────────────────────────────────────────────────
+5. Reverted CompilerClassLoader from broken inheritance back to composition
+──────────────────────────────────────────────────────────────────────────────
+File: core/build/src/main/java/com/bori/core/build/KotlinCompilerDaemon.kt
+
+Bug: An attempted fix tried to extend DelegateLastClassLoader so that
+Class.getResource() would dispatch to our override. This caused a compile
+error because DelegateLastClassLoader is declared final in the Android SDK.
+
+Fix: Reverted to composition — CompilerClassLoader extends ClassLoader and
+delegates loadClass/getResource/getResources to an inner DelegateLastClassLoader.
+The getResource() override approach was abandoned in favor of -Xintellij-plugin-root
+(see fix #6 below).
+
+
+──────────────────────────────────────────────────────────────────────────────
+6. Added -Xintellij-plugin-root compiler argument
+──────────────────────────────────────────────────────────────────────────────
+File: core/build/src/main/java/com/bori/core/build/steps/KotlinCompileStep.kt
+
+Root cause of ProviderNotFoundException:
+  KotlinCoreEnvironment.registerApplicationExtensionPointsAndExtensionsFrom()
+  calls PathUtil.getResourcePathForClass(ApplicationEnvironment::class.java).
+  On Android, PathUtil returns a jar:file:// URL pointing into kotlinc.jar.
+  PluginManagerCore then calls loadDescriptorFromJar() which uses
+  FileSystems.newFileSystem() (NIO2). Android ARM has no ZipFileSystemProvider
+  registered → ProviderNotFoundException.
+
+Fix: Pass -Xintellij-plugin-root=<pluginsDir> to the compiler. Kotlin 1.8.22
+reads this via CLIConfigurationKeys.INTELLIJ_PLUGIN_ROOT and uses it directly
+as File(locator), completely bypassing PathUtil. The pluginsDir is a real
+directory on the filesystem, so loadDescriptorFromDir() (plain file I/O)
+is used instead of loadDescriptorFromJar().
+
+The pluginsDir (filesDir/tools/kotlinc-plugins/) is populated by
+extractPluginsDir() in KotlinCompilerDaemon before compilation starts.
+
+
+──────────────────────────────────────────────────────────────────────────────
+7. Fixed extractPluginsDir() ZIP entry path
+──────────────────────────────────────────────────────────────────────────────
+File: core/build/src/main/java/com/bori/core/build/KotlinCompilerDaemon.kt
+
+Bug: The code looked for "extensions/compiler.xml" inside kotlinc.jar, but
+kotlin-compiler-embeddable stores it at "META-INF/extensions/compiler.xml".
+Extraction silently skipped, leaving pluginsDir empty.
+
+Fix: Try both paths:
+  zip.getEntry("extensions/compiler.xml")
+      ?: zip.getEntry("META-INF/extensions/compiler.xml")
+
+The extracted file is written to pluginsDir/extensions/compiler.xml (the
+path that PluginManagerCore looks for when given the pluginsDir root).
+
+
+──────────────────────────────────────────────────────────────────────────────
+8. Fixed -Xintellij-plugin-root argument format
+──────────────────────────────────────────────────────────────────────────────
+File: core/build/src/main/java/com/bori/core/build/steps/KotlinCompileStep.kt
+
+Bug: The argument was passed as two separate list entries:
+  add("-Xintellij-plugin-root"); add(pluginsDir.absolutePath)
+The Kotlin CLI parser warned this is the "obsolete form" and may not work.
+
+Fix: Combined into a single entry with = separator:
+  add("-Xintellij-plugin-root=${pluginsDir.absolutePath}")
+
+
+──────────────────────────────────────────────────────────────────────────────
+9. ASM-patched PluginManagerCore.registerExtensionPointAndExtensions
+──────────────────────────────────────────────────────────────────────────────
+File: core/build/build.gradle.kts  (patchPluginManagerCore function)
+
+Error: NoClassDefFoundError: javax.xml.stream.XMLInputFactory
+  PluginManagerCore.registerExtensionPointAndExtensions() → loadDescriptorFromDir()
+  → JDOMUtil.load(File) → JDOMUtil.loadUsingStaX() → getXmlInputFactory()
+  → XMLInputFactory.newInstance()
+  Android has never shipped javax.xml.stream (StAX). It was explicitly excluded.
+
+Fix: Added patchPluginManagerCore() ASM transformer to build.gradle.kts.
+It replaces the body of every overload of registerExtensionPointAndExtensions
+with a single RETURN instruction (void no-op).
+
+The extension implementations that method would register are optional plugin
+hooks (diagnostic suppressors, contributor extensions, etc.). The core
+extension POINTS are registered separately by registerAppExtensionPoints()
+and are unaffected. Basic Kotlin compilation works with an empty extension
+implementation list.
+
+Applied in patchKotlinCompilerJar() for:
+  org/jetbrains/kotlin/com/intellij/ide/plugins/PluginManagerCore.class
+
+
+──────────────────────────────────────────────────────────────────────────────
+10. ASM-patched CacheKt.getSetterInfos
+──────────────────────────────────────────────────────────────────────────────
+File: core/build/build.gradle.kts  (patchCacheKt function)
+
+Error: NoClassDefFoundError: javax.swing.Icon
+  CacheKt.getSetterInfos() calls Class.getMethods() on IntelliJ platform
+  component classes. Android's Class.getMethods() sorts/deduplicates results
+  using CollectionUtils.removeDuplicates(), which calls Method.getReturnType()
+  on every method to compare them. One IntelliJ class has a method returning
+  javax.swing.Icon. ART resolves the type at that point → crash.
+
+  Adding Icon to swing-stubs would be fragile — IntelliJ references many
+  Swing types and new ones would keep appearing.
+
+Fix: Added patchCacheKt() ASM transformer. It wraps any method in CacheKt
+that invokes Class.getMethods() in a try-catch(java.lang.Error) block.
+On Error, the catch returns Collections.emptyList(). This means no setter-
+based DI injection for classes that reference unavailable types, which is
+safe — the DI container treats an empty setter list as "no optional setters."
+
+Applied in patchKotlinCompilerJar() for:
+  org/jetbrains/kotlin/container/CacheKt.class
+
+
+──────────────────────────────────────────────────────────────────────────────
+11. Added org.jetbrains:annotations:13.0 to compiler classloader
+──────────────────────────────────────────────────────────────────────────────
+Files: core/build/build.gradle.kts
+       core/build/src/main/java/com/bori/core/build/tools/ToolsManager.kt
+       core/build/src/main/java/com/bori/core/build/KotlinCompilerDaemon.kt
+
+Error: NoClassDefFoundError: org.jetbrains.annotations.Nullable
+  AnnotationCodegen.generateNullabilityAnnotationForCallable() tries to
+  load org.jetbrains.annotations.Nullable at codegen time to emit nullability
+  annotations on method parameters. This class is in the jetbrains annotations
+  library, which is not part of any of the pre-dexed JARs on the classloader.
+
+Fix:
+  - Added buildToolsJars("org.jetbrains:annotations:13.0") dependency
+  - copyBuildTools pre-dexes it as jetbrains-annotations-dex.jar
+  - ToolsManager exposes jetbrainsAnnotationsDexJar and extracts it in prepare()
+  - KotlinCompilerDaemon.getLoaderPath() appends it to the DelegateLastClassLoader
+    path so the compiler can load @Nullable, @NotNull, @NonNls, etc. at runtime
+
+
+──────────────────────────────────────────────────────────────────────────────
+STATUS
+──────────────────────────────────────────────────────────────────────────────
+After fixes 1-11, the Kotlin compiler successfully:
+  - Initializes the IntelliJ application environment
+  - Resolves the DI container component graph
+  - Performs type analysis on Kotlin source files
+  - Generates JVM bytecode with nullability annotations
+
+Remaining: verifying that the generated .class files are dexed by D8 and
+that the final APK installs and runs on device.

@@ -1,0 +1,37 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Keystore files — never commit these
+*.jks
+*.keystore
+keystore.properties
+
+# APK/AAB output
+*.apk
+*.aab
+
+# Module build directories
+app/build/
+core/*/build/
+
+# Kotlin compiler daemon state
+.kotlin/
+
+# Release packages from scripts/make_full_release.sh
+/dist/
+
+# Private notes: kept on disk, not in the public repo
+/ref_notes/
+/SESSION_NOTES.md
+/codebotsummary.txt
+/build-log.txt
+/TestPhase9.kt
+/.claude.json

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Plain http is allowed so the "Local server" provider can reach Ollama / LM Studio,
+    which serve http on the user's PC (usually over Tailscale, which encrypts the link).
+    Every cloud provider client hard-codes https URLs, so nothing else is downgraded.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

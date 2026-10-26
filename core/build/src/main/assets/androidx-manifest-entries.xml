@@ -1,0 +1,3 @@
+<manifest-entries>
+    <uses-permission android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"/>
+</manifest-entries>

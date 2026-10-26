@@ -1,0 +1,30 @@
+Bori - Code
+Copyright 2026 the Bori - Code authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The license covers the code. It does not grant use of the "Bori" and "Bori - Code" names or the
+app icon (the Sol de Jayuya between < > on celeste, made by scripts/gen_bori_code_icon.py): a
+fork that is published must use its own name and icon.
+
+Third-party software in this repository and in the app, each under its own license:
+
+- Termux terminal-emulator and terminal-view 0.118.3 (core/terminal), Apache-2.0.
+  See core/terminal/NOTICE for the changes.
+- proot 5.1.107.101 (Termux's fork), GPL-2.0; talloc 2.5.0, LGPL-3.0-or-later;
+  libandroid-shmem 0.7, BSD-3-Clause. Sources and build script in third_party/ and
+  scripts/build_proot.sh; full flavor only. See third_party/README.md.
+- SCOWL word lists 2020.12.07, SCOWL license (MIT-like).
+  See app/src/main/assets/keyboard/SCOWL-NOTICE.txt.
+- Kotlin compiler 1.8.22, Apache-2.0, bundled in core/build and patched for ART at build time
+  (see docs/BUILD-PIPELINE.md).
+- Android build tools (aapt2, d8/R8) and Android platform stubs, Apache-2.0 (AOSP).
+- Eclipse Compiler for Java (ECJ) 4.6.1, EPL-1.0.
+- Sora Editor, LGPL-2.1; trove4j, LGPL-2.1; JGit, EDL-1.0; Bouncy Castle, MIT;
+  OkHttp, AndroidX, Jetpack Compose, Hilt, Kotlin libraries, LiteRT-LM, Apache Commons
+  Compress, Apache-2.0; XZ for Java, 0BSD; compose-markdown, MIT.
+
+The app's Settings -> About lists the same notices.
+
+Claude Code and Antigravity CLI are not part of Bori - Code. The app downloads them from
+Anthropic and Google on the user's request, and they are under their makers' own terms.

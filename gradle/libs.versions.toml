@@ -1,0 +1,124 @@
+[versions]
+agp = "8.7.3"
+kotlin = "2.0.21"
+ksp = "2.0.21-1.0.27"
+coreKtx = "1.15.0"
+lifecycleRuntimeKtx = "2.8.7"
+activityCompose = "1.9.3"
+composeBom = "2024.12.01"
+hilt = "2.57"
+hiltNavigationCompose = "1.2.0"
+room = "2.7.0"
+datastore = "1.1.1"
+okhttp = "4.12.0"
+kotlinxSerializationJson = "1.7.3"
+jetpackSecurity = "1.1.0-alpha06"
+navigationCompose = "2.8.4"
+soraEditor = "0.23.4"
+composeMarkdown = "0.5.4"
+ecj = "4.6.1"
+kotlin-compiler-asset = "1.8.22"
+bouncycastle = "1.78.1"
+jgit = "6.10.0.202406032230-r"
+litertlm = "0.16.1"
+coroutines = "1.9.0"
+commonsCompress = "1.27.1"
+xz = "1.10"
+adaptive = "1.0.0"
+window = "1.3.0"
+
+[libraries]
+# AndroidX Core
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleRuntimeKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
+
+# Compose BOM
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+androidx-material3-adaptive = { group = "androidx.compose.material3.adaptive", name = "adaptive", version.ref = "adaptive" }
+androidx-window = { group = "androidx.window", name = "window", version.ref = "window" }
+
+# Hilt
+hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
+hilt-compiler = { group = "com.google.dagger", name = "hilt-compiler", version.ref = "hilt" }
+hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
+
+# Room
+room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+
+# DataStore
+datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
+
+# Networking
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
+
+# Coroutines: compile against 1.9 (Kotlin 2.0 metadata); the app forces 1.11.0 at runtime for LiteRT-LM
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+
+# Archives (Linux rootfs tarballs)
+commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commonsCompress" }
+xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
+
+# Serialization
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
+
+# Security
+security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "jetpackSecurity" }
+
+# Editor
+sora-editor = { group = "io.github.Rosemoe.sora-editor", name = "editor", version.ref = "soraEditor" }
+sora-editor-language-java = { group = "io.github.Rosemoe.sora-editor", name = "language-java", version.ref = "soraEditor" }
+
+# Markdown rendering
+compose-markdown = { group = "com.github.jeziellago", name = "compose-markdown", version.ref = "composeMarkdown" }
+
+# Java compiler (ECJ)
+ecj = { group = "org.eclipse.jdt.core.compiler", name = "ecj", version.ref = "ecj" }
+trove4j = { group = "org.jetbrains.intellij.deps", name = "trove4j", version = "1.0.1" }
+
+# Kotlin compiler (bundled as asset, loaded via PathClassLoader at runtime)
+# Pinned to 1.8.22 — K2 (2.x) uses IntelliJ Platform 2024.1 which accesses sun.misc.Unsafe
+# via MethodHandles.Lookup.findVirtual, which fails on Android's ART. 1.8.22 uses plain
+# reflection instead and is Android-compatible.
+kotlin-compiler-embeddable = { group = "org.jetbrains.kotlin", name = "kotlin-compiler-embeddable", version.ref = "kotlin-compiler-asset" }
+kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
+kotlin-reflect = { group = "org.jetbrains.kotlin", name = "kotlin-reflect", version.ref = "kotlin-compiler-asset" }
+kotlin-stdlib-asset = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin-compiler-asset" }
+kotlin-reflect-asset = { group = "org.jetbrains.kotlin", name = "kotlin-reflect", version.ref = "kotlin-compiler-asset" }
+
+# BouncyCastle (APK signing)
+bcprov = { group = "org.bouncycastle", name = "bcprov-jdk15to18", version.ref = "bouncycastle" }
+bcpkix = { group = "org.bouncycastle", name = "bcpkix-jdk15to18", version.ref = "bouncycastle" }
+
+# JGit (pure Java — no native binary required on Android)
+jgit = { group = "org.eclipse.jgit", name = "org.eclipse.jgit", version.ref = "jgit" }
+
+# LiteRT-LM on-device LLM inference (Gemma local model)
+litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
+
+# Testing
+junit = { group = "junit", name = "junit", version = "4.13.2" }
+androidx-junit = { group = "androidx.test.ext", name = "junit", version = "1.2.1" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version = "3.6.1" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

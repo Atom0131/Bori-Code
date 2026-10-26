@@ -1,0 +1,8 @@
+This module is a vendored copy of the terminal-emulator and terminal-view libraries from
+Termux (https://github.com/termux/termux-app, tag v0.118.3), which derive from Jack Palevich's
+Android Terminal Emulator and are licensed under the Apache License 2.0
+(https://www.apache.org/licenses/LICENSE-2.0), as stated in termux-app's LICENSE.md.
+
+Changes from upstream: Gradle build rewritten for Bori Code (Kotlin DSL, 16 KB page-aligned
+libtermux.so, arm64-v8a + x86_64 only). Java and C sources are unmodified unless noted in git history.
+TerminalView has a setSoftKeyboardEnabled() switch, so the app can use its own on-screen keys.
