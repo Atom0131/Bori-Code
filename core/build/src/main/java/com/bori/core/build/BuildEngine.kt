@@ -449,13 +449,17 @@ class BuildEngine @Inject constructor(
         val generatedJava = processors.isNotEmpty() && kspJavaOut.walkTopDown().any { it.extension == "java" }
         val javaChanged = javaUserFiles.isNotEmpty() && cache.changed("sources-java", javaUserFiles + baseClasspath)
         if (generatedJava || javaChanged || (javaUserFiles.isNotEmpty() && (resManifestChanged || buildConfigChanged || recompiled))) {
-            emit(BuildEvent.Log(if (generatedJava) "▶ Java compile (ECJ + generated sources)" else "▶ Java compile (ECJ)"))
+            // One ECJ run covers every module, so it takes the highest level any of them asks for.
+            val javaLevel = (modules.mapNotNull { it.javaLevel }.maxOrNull() ?: JavaCompileStep.DEFAULT_JAVA_LEVEL)
+                .coerceIn(8, JavaCompileStep.MAX_JAVA_LEVEL)
+            emit(BuildEvent.Log(if (generatedJava) "▶ Java $javaLevel compile (ECJ + generated sources)" else "▶ Java $javaLevel compile (ECJ)"))
             val compileLogs = mutableListOf<String>()
             val compileOk = JavaCompileStep(toolsManager).compile(
                 sourceRoots = javaSourceRoots,
                 classesDir = classesDir,
                 extraClasspath = baseClasspath,
                 applyHiddenApiBypass = { kotlinDaemon.applyHiddenApiBypass() },
+                javaLevel = javaLevel,
             ) { compileLogs += it }
             compileLogs.forEach { emit(BuildEvent.Log(it)) }
             if (!compileOk) {

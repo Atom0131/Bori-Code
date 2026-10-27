@@ -26,6 +26,7 @@ class JavaCompileStep(private val tools: ToolsManager) {
         processorJars: List<File> = emptyList(),
         generatedSourcesDir: File? = null,
         applyHiddenApiBypass: () -> Unit = {},
+        javaLevel: Int = DEFAULT_JAVA_LEVEL,
         emit: (String) -> Unit,
     ): Boolean {
         val allJavaFiles = sourceRoots.flatMap { root ->
@@ -59,8 +60,10 @@ class JavaCompileStep(private val tools: ToolsManager) {
 
         val validProcessorJars = processorJars.filter { it.exists() }
         val args = buildList {
-            add("-source"); add("8")
-            add("-target"); add("8")
+            val level = javaLevel.coerceIn(8, MAX_JAVA_LEVEL).toString()
+            add("-source"); add(level)
+            add("-target"); add(level)
+            add("-Xemacs") // "File.java:12: error: …", the form DiagnosticParser reads
             add("-bootclasspath"); add(bootclasspath)
             add("-classpath"); add(classpath)
             if (validProcessorJars.isEmpty()) {
@@ -82,7 +85,7 @@ class JavaCompileStep(private val tools: ToolsManager) {
         val executor = Executors.newSingleThreadExecutor()
         val future = executor.submit<Boolean> {
             applyHiddenApiBypass()
-            val compiler = EclipseMain(pw, pw, false, null, null)
+            val compiler = AndroidEcj(pw)
             compiler.compile(args)
         }
 
@@ -127,7 +130,24 @@ class JavaCompileStep(private val tools: ToolsManager) {
         return success
     }
 
+    /**
+     * ECJ refuses -bootclasspath from Java 9 on, because it wants the running JDK's modules,
+     * which Android doesn't have. Skipping that check makes it compile against android.jar the
+     * way it does at Java 8.
+     */
+    private class AndroidEcj(pw: PrintWriter) : EclipseMain(pw, pw, false, null, null) {
+        override fun validateClasspathOptions(
+            bootclasspaths: ArrayList<String>?,
+            endorsedDirClasspaths: ArrayList<String>?,
+            extdirsClasspaths: ArrayList<String>?,
+        ): Long = 0L // only used with --release, which isn't passed
+    }
+
     companion object {
         private const val COMPILE_TIMEOUT_SECONDS = 90L
+        /** Java level when the build file doesn't set one; Java 17 also accepts Java 8 code. */
+        const val DEFAULT_JAVA_LEVEL = 17
+        /** ECJ 3.32 goes up to 19; 17 is what Android Studio projects use. */
+        const val MAX_JAVA_LEVEL = 17
     }
 }

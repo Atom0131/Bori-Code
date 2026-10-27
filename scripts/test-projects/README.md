@@ -11,6 +11,7 @@ to logcat with the tag `BORI_TEST` when it starts: `<name> OK …` when every ch
 | `t5-multi-module` | Groovy DSL, `include ':app', ':core'`, a library module with resources, a service in its manifest and an `api` dependency (OkHttp) |
 | `t6-libraries` | Maven AndroidX instead of the bundled set (appcompat 1.7), a BOM via `platform()` with a versionless coordinate, a JitPack library, a jar in `libs/` (`fileTree`), ViewBinding, core library desugaring (`java.time` on minSdk 24), and an app bundle (`--ez bundle true`) |
 | `t7-compose-modern` | Kotlin 2 (K2), Compose 1.7 from the Compose BOM in a catalog with `[plugins]`, kotlinx.serialization, `@Parcelize`, Kotlin 1.9+ features |
+| `t9-java17` | Java 17 from `sourceCompatibility = VERSION_17` on minSdk 26: records (desugared by D8), a sealed interface, switch expressions, text blocks, `var`, pattern `instanceof`, and Kotlin using a Java record |
 | `t8-room-hilt` | KSP on the phone: Room, Hilt (plugin applied, `@AndroidEntryPoint` / `@HiltAndroidApp`, a `kapt` line run through KSP) and Moshi codegen |
 
 `t1` and `t5` turn on `isMinifyEnabled` for release (R8); `t3` and `t6` don't (D8 `--release`).

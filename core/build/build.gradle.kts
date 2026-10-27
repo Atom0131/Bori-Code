@@ -939,6 +939,72 @@ val buildToolsJars: Configuration by configurations.creating {
     isCanBeResolved = true
 }
 
+// ECJ as published; patchEcj turns it into the jar the app compiles against and ships.
+val ecjSource: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+
+/**
+ * ECJ 3.32 runs on Java 11 and calls four methods Android only has from API 33 (or not at all):
+ * InputStream.readAllBytes/readNBytes (it reads every class file with them), Arrays.compare(char[],
+ * char[]) and Files.readString. The calls are pointed at com.bori.core.build.compat.EcjCompat.
+ * FileSystem's static init also asks javax.lang.model.SourceVersion (not on Android) whether the
+ * JDK is 12+; that probe goes there too, and its result is only null-checked.
+ */
+val patchEcj by tasks.registering {
+    val out = layout.buildDirectory.file("ecj-art/ecj-art.jar")
+    inputs.files(ecjSource)
+    outputs.file(out)
+    doLast {
+        val compat = "com/bori/core/build/compat/EcjCompat"
+        val calls = mapOf(
+            "java/io/InputStream.readAllBytes()[B" to ("readAllBytes" to "(Ljava/io/InputStream;)[B"),
+            "java/io/InputStream.readNBytes(I)[B" to ("readNBytes" to "(Ljava/io/InputStream;I)[B"),
+            "java/util/Arrays.compare([C[C)I" to ("compare" to "([C[C)I"),
+            "java/nio/file/Files.readString(Ljava/nio/file/Path;)Ljava/lang/String;" to ("readString" to "(Ljava/nio/file/Path;)Ljava/lang/String;"),
+        )
+        var changed = 0
+        ZipFile(ecjSource.singleFile).use { zip ->
+            ZipOutputStream(out.get().asFile.outputStream().buffered()).use { zos ->
+                for (entry in zip.entries()) {
+                    if (entry.isDirectory) continue
+                    var bytes = zip.getInputStream(entry).use { it.readBytes() }
+                    if (entry.name.endsWith(".class")) {
+                        val reader = ClassReader(bytes)
+                        val writer = ClassWriter(reader, 0)
+                        var touched = false
+                        reader.accept(object : org.objectweb.asm.ClassVisitor(Opcodes.ASM9, writer) {
+                            override fun visitMethod(access: Int, name: String?, descriptor: String?, signature: String?, exceptions: Array<out String>?): org.objectweb.asm.MethodVisitor {
+                                val mv = super.visitMethod(access, name, descriptor, signature, exceptions)
+                                return object : org.objectweb.asm.MethodVisitor(Opcodes.ASM9, mv) {
+                                    override fun visitMethodInsn(opcode: Int, owner: String, name: String, desc: String, isInterface: Boolean) {
+                                        val target = calls["$owner.$name$desc"]
+                                            ?: ("isJre12Plus" to "(Ljava/lang/String;)Ljava/lang/Object;").takeIf {
+                                                reader.className == "org/eclipse/jdt/internal/compiler/batch/FileSystem" &&
+                                                    owner == "javax/lang/model/SourceVersion" && name == "valueOf"
+                                            }
+                                        if (target == null) super.visitMethodInsn(opcode, owner, name, desc, isInterface)
+                                        else { touched = true; super.visitMethodInsn(Opcodes.INVOKESTATIC, compat, target.first, target.second, false) }
+                                    }
+                                }
+                            }
+                        }, 0)
+                        if (touched) { bytes = writer.toByteArray(); changed++ }
+                    }
+                    // Drop the signature files: the patched classes no longer match them.
+                    if (entry.name.startsWith("META-INF/") && (entry.name.endsWith(".SF") || entry.name.endsWith(".RSA") || entry.name.endsWith(".DSA"))) continue
+                    zos.putNextEntry(ZipEntry(entry.name))
+                    zos.write(bytes)
+                    zos.closeEntry()
+                }
+            }
+        }
+        logger.lifecycle("Patched ECJ for ART: $changed class(es) retargeted")
+    }
+}
+
 // Resolves AndroidX library AARs/JARs for asset bundle generation at build time.
 // Excludes Kotlin stdlib (bundled separately as kotlin-stdlib.jar / kotlin-stdlib-dex.jar).
 val androidxLibs: Configuration by configurations.creating {
@@ -975,8 +1041,9 @@ dependencies {
 
     implementation(project(":core:project"))
 
-    // Java compiler (ECJ)
-    implementation(libs.ecj)
+    // Java compiler (ECJ), patched for ART by patchEcj
+    ecjSource(libs.ecj)
+    implementation(files(patchEcj))
 
     // Swing stubs for IntelliJ platform compatibility on Android
     implementation(files("stubs/swing-stubs.jar"))

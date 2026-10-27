@@ -141,7 +141,23 @@ object ModuleParser {
                 Regex("""\barg\s*\(\s*["']([^"']+)["']\s*,\s*["']([^"']*)["']""").findAll(ksp)
                     .associate { it.groupValues[1] to it.groupValues[2].replace("\$projectDir", moduleDir.absolutePath).replace("\${projectDir}", moduleDir.absolutePath) }
             },
+            javaLevel = javaLevel(text),
         )
+    }
+
+    /**
+     * The Java level a build file asks for: `sourceCompatibility = JavaVersion.VERSION_17` (or
+     * VERSION_1_8, "17", 1.8, JavaVersion.toVersion(17)), `jvmToolchain(17)` or
+     * `JavaLanguageVersion.of(17)`.
+     */
+    internal fun javaLevel(text: String): Int? {
+        fun level(major: String, minor: String?): Int? =
+            if (major == "1") minor?.toIntOrNull() else major.toIntOrNull()
+        Regex("""\bsourceCompatibility\s*(?:=\s*|\s+|\(\s*)([^\n;)]+)""").find(text)?.groupValues?.get(1)?.let { value ->
+            Regex("""VERSION_(\d+)(?:_(\d+))?""").find(value)?.let { return level(it.groupValues[1], it.groupValues[2].ifEmpty { null }) }
+            Regex("""(\d+)(?:\.(\d+))?""").find(value)?.let { return level(it.groupValues[1], it.groupValues[2].ifEmpty { null }) }
+        }
+        return Regex("""\b(?:jvmToolchain|JavaLanguageVersion\.of)\s*\(\s*(\d+)""").find(text)?.groupValues?.get(1)?.toIntOrNull()
     }
 
     /** Plugin ids from `plugins {}` (`id(...)`, `kotlin(...)`, `alias(libs.plugins.x)`) and `apply plugin:`. */

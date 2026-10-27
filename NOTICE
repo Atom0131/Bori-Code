@@ -26,7 +26,8 @@ Third-party software in this repository and in the app, each under its own licen
 - Android build tools (aapt2, d8/R8/L8) and Android platform stubs, Apache-2.0 (AOSP);
   apksig, Apache-2.0 (AOSP).
 - ASM 9.7.1, BSD-3-Clause.
-- Eclipse Compiler for Java (ECJ) 4.6.1, EPL-1.0.
+- Eclipse Compiler for Java (ECJ) 3.32.0, EPL-2.0. Four Java 11 calls are pointed at Bori's own
+  replacements at build time so it runs on Android 8+; the classes are otherwise unchanged.
 - Sora Editor, LGPL-2.1; trove4j, LGPL-2.1; JGit, EDL-1.0; Bouncy Castle, MIT;
   OkHttp, AndroidX, Jetpack Compose, Hilt, Kotlin libraries, LiteRT-LM, Apache Commons
   Compress, Apache-2.0; XZ for Java, 0BSD; compose-markdown, MIT.

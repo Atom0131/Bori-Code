@@ -55,7 +55,7 @@ private val appNotices = listOf(
     ),
     Notice("Android build tools (aapt2, d8, R8, L8) and apksig", "Apache-2.0", "https://source.android.com"),
     Notice("ASM 9.7", "BSD-3-Clause", "https://asm.ow2.io"),
-    Notice("Eclipse Compiler for Java (ECJ) 4.6.1", "EPL-1.0", "https://www.eclipse.org/jdt/core/"),
+    Notice("Eclipse Compiler for Java (ECJ) 3.32", "EPL-2.0", "https://www.eclipse.org/jdt/core/"),
     Notice("Sora Editor 0.23.4", "LGPL-2.1", "https://github.com/Rosemoe/sora-editor"),
     Notice("JGit 6.10", "EDL-1.0 (BSD-3-Clause)", "https://www.eclipse.org/jgit/"),
     Notice("OkHttp 4.12", "Apache-2.0", "https://square.github.io/okhttp/"),

@@ -56,7 +56,7 @@ among others — **`patched_kotlinc_embeddable.jar`**.
 | `kotlinx-coroutines-dex.jar` | Needed by the 2.x compiler at run time. |
 | `java-compiler-api-dex.jar` | OpenJDK's javax.lang.model / javax.annotation.processing / javax.tools (JavaPoet in Room/Dagger needs them) and six javax.xml.stream interfaces (the compiler's bundled Aalto StAX parser reads plugin descriptors). `SourceVersion.getLatestSupported()` is patched (it calls `Runtime.version()`). |
 | `processor-stubs-dex.jar` | `stubs/processor-stubs`: an sqlite-jdbc stand-in (Room's build-time query check needs a native library; it now warns and skips) and `ProcessorCompat` (JDK 9+ methods processors call). |
-| Patched ECJ (Eclipse JDT) | Java compiler; patched with a hidden-API bypass and `ExceptionInInitializerError` recovery for Android 16 / release builds (ProGuard keep rules + per-thread init). |
+| Patched ECJ 3.32 (Eclipse JDT) | Java compiler, Java 8–17 (the build file's `sourceCompatibility` / `jvmToolchain`, default 17). Compiled into the app, not an asset: the `patchEcj` Gradle task points its Java 11 calls at `compat/EcjCompat`. A hidden-API bypass and ProGuard keep rules keep it working in release builds. |
 | `d8.jar` | D8, R8 and L8. |
 | AAPT2 + `android-stubs.jar` + `core-lambda-stubs.jar` | Resource compiler and the `android.jar` stubs / desugaring stubs to compile against. |
 | `androidx-*` | The bundled AndroidX set: merged classes jar, its dex, compiled resources, packages, manifest entries and `androidx-versions.txt`. |
@@ -85,6 +85,13 @@ These are the hard-won fixes that keep the toolchain running on ART. Sources:
   sqlite-jdbc's native library (stub), google-java-format (`dagger.formatGeneratedSource=disabled`).
 - **NIO2 zip filesystem crash** — replaced with a `FastJarFileSystem` so kotlinc can
   read jars without the unavailable `ZipFileSystemProvider`.
+- **ECJ 3.32 on Android 8+** (2026-10-26; 4.6.1, Java 8 only, before) — ECJ refuses
+  `-bootclasspath` from Java 9 on, so `JavaCompileStep.AndroidEcj` skips that check
+  (`validateClasspathOptions`) and it compiles against android.jar as before. `patchEcj` points
+  `InputStream.readAllBytes/readNBytes`, `Arrays.compare(char[],char[])`, `Files.readString`
+  (API 33+ or missing) and FileSystem's `SourceVersion` JDK-12 probe at `EcjCompat`. D8 desugars
+  the records and other Java 17 class files for the app's minSdk. `-Xemacs` prints errors as
+  `File.java:12: error: …`, which `DiagnosticParser` reads.
 - **ECJ `ExceptionInInitializerError` on Android 16 / release** — fixed with ProGuard
   keep rules, a per-thread hidden-API bypass, and careful static-initializer ordering.
 - **compiler.xml extension points** — the daemon also registers compiler.xml's application

@@ -450,10 +450,9 @@ class KotlinCompilerDaemon @Inject constructor() {
         out: PrintStream,
         extraPluginDexJars: List<File> = emptyList(),
     ): String {
-        val ktFiles = sourceRoots.flatMap { root ->
-            root.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
-        }
-        val argsWithFiles = argsNoFiles + ktFiles.map { it.absolutePath }
+        // Folders, not .kt files: the compiler then also reads the Java sources in them, so
+        // Kotlin can use the project's Java classes (they're compiled after Kotlin).
+        val argsWithFiles = argsNoFiles + sourceRoots.filter { it.exists() }.map { it.absolutePath }
         return compileIncremental(tools, profile, parentLoader, argsWithFiles, out, extraPluginDexJars)
     }
 

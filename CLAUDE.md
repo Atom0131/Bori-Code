@@ -38,7 +38,7 @@ in the full flavor only); `core:ai → core:security, core:editor`; `core:build 
 ## ⚠️ HARD RULES — read before building or editing
 
 1. **NEVER run `gradlew clean`.** The build module bundles a *patched*
-   `patched_kotlinc_embeddable.jar` (Kotlin 1.8.22 patched for Android/ART) plus
+   `patched_kotlinc_embeddable.jar` (Kotlin 2.0.21 patched for Android/ART) plus
    patched ECJ/d8/aapt2 assets, produced by the `copyBuildTools` task. `clean`
    destroys them and **breaks every build** until manually regenerated. See
    `docs/BUILD-PIPELINE.md`.
@@ -97,9 +97,9 @@ Outputs:
   (Play gets `playRelease`)
 
 Toolchain (from `gradle/libs.versions.toml`): AGP 8.7.3, Kotlin 2.0.21 (build),
-Compose BOM 2024.12.01, Hilt 2.57, Room 2.7.0. Note: the *bundled on-device*
-compiler is pinned to **Kotlin 1.8.22** (K2 uses `sun.misc.Unsafe` which fails on
-ART) — this is separate from the Gradle Kotlin version.
+Compose BOM 2024.12.01, Hilt 2.57, Room 2.7.0. The *bundled on-device* compilers are
+separate from these: Kotlin 2.0.21 (`kotlin-compiler-asset`, patched for ART by `copyBuildTools`)
+and ECJ 3.32 (Java up to 17, patched for Android 8+ by the `patchEcj` task).
 
 ## Where things live (quick index)
 - AI request flow: `core/ai/.../context/ContextManager.kt` → `router/ModelRouter.kt`

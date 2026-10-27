@@ -53,6 +53,8 @@ data class ModuleInfo(
     val composeFeature: Boolean = false,
     /** `ksp { arg("key", "value") }` processor options. */
     val kspArgs: Map<String, String> = emptyMap(),
+    /** Java language level from sourceCompatibility / jvmToolchain (8, 11, 17…); null when unset. */
+    val javaLevel: Int? = null,
 ) {
     val composeEnabled: Boolean get() = "org.jetbrains.kotlin.plugin.compose" in pluginIds || composeFeature
     val serializationPlugin: Boolean get() = pluginIds.any { it.endsWith("plugin.serialization") || it == "kotlinx-serialization" }
