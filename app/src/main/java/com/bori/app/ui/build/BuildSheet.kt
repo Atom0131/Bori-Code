@@ -34,10 +34,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.AnnotatedString
@@ -49,12 +51,26 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.bori.core.build.model.BuildEvent
 import java.io.File
 
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun BuildSheet(
     viewModel: BuildViewModel,
     onDismiss: () -> Unit,
     onViewLogs: () -> Unit = {},
+) {
+    // Folding moves Bori to the other display, and the sheet's own window doesn't follow it: the sheet
+    // vanished while still "open". A new sheet per screen size puts it back on the display in use.
+    val configuration = LocalConfiguration.current
+    key(configuration.screenWidthDp, configuration.screenHeightDp) {
+        BuildSheetContent(viewModel, onDismiss, onViewLogs)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun BuildSheetContent(
+    viewModel: BuildViewModel,
+    onDismiss: () -> Unit,
+    onViewLogs: () -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val logs by viewModel.logs.collectAsState()
