@@ -4,14 +4,9 @@ import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.bori.app.data.build.BuildStateHolder
-import com.bori.app.data.build.DiagnosticsStateHolder
+import com.bori.app.data.build.BuildRunner
 import com.bori.app.data.build.KeystoreRepository
-import com.bori.app.data.prefs.UserPreferencesRepository
 import com.bori.app.data.project.ProjectStateHolder
-import com.bori.app.service.ChatForegroundService
-import com.bori.core.build.DiagnosticParser
-import com.bori.core.build.BuildEngine
 import com.bori.core.build.model.BuildEvent
 import com.bori.core.build.model.BuildVariant
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -19,34 +14,19 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class BuildViewModel @Inject constructor(
-    private val buildEngine: BuildEngine,
+    private val buildRunner: BuildRunner,
     private val projectStateHolder: ProjectStateHolder,
-    private val buildStateHolder: BuildStateHolder,
-    private val diagnosticsStateHolder: DiagnosticsStateHolder,
-    private val prefsRepository: UserPreferencesRepository,
     private val keystoreRepository: KeystoreRepository,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
-    sealed class UiState {
-        data object Idle : UiState()
-        data object Building : UiState()
-        data class Done(val apkPath: String, val packageName: String) : UiState()
-        data class Failed(val error: String) : UiState()
-    }
-
-    private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
-    val uiState: StateFlow<UiState> = _uiState.asStateFlow()
-
-    private val _logs = MutableStateFlow<List<BuildEvent.Log>>(emptyList())
-    val logs: StateFlow<List<BuildEvent.Log>> = _logs.asStateFlow()
+    val uiState: StateFlow<BuildRunner.UiState> = buildRunner.uiState
+    val logs: StateFlow<List<BuildEvent.Log>> = buildRunner.logs
 
     private val _isInstalled = MutableStateFlow(false)
     val isInstalled: StateFlow<Boolean> = _isInstalled.asStateFlow()
@@ -59,7 +39,7 @@ class BuildViewModel @Inject constructor(
     val appBundle: StateFlow<Boolean> = _appBundle.asStateFlow()
 
     fun setAppBundle(on: Boolean) {
-        if (_uiState.value !is UiState.Building) _appBundle.value = on
+        if (uiState.value !is BuildRunner.UiState.Building) _appBundle.value = on
     }
 
     private val _hasCustomKeystore = MutableStateFlow(false)
@@ -69,10 +49,13 @@ class BuildViewModel @Inject constructor(
         viewModelScope.launch {
             _hasCustomKeystore.value = keystoreRepository.get() != null
         }
+        viewModelScope.launch {
+            buildRunner.uiState.collect { if (it is BuildRunner.UiState.Done) refreshInstallState(it.packageName) }
+        }
     }
 
     fun setVariant(v: BuildVariant) {
-        if (_uiState.value !is UiState.Building) _variant.value = v
+        if (uiState.value !is BuildRunner.UiState.Building) _variant.value = v
     }
 
     fun refreshInstallState(packageName: String) {
@@ -90,77 +73,13 @@ class BuildViewModel @Inject constructor(
             ?.let { context.startActivity(it) }
     }
 
-    private fun setLoading(loading: Boolean, projectName: String? = null) {
-        if (loading) ChatForegroundService.acquire(context, ChatForegroundService.Reason.BUILD, projectName)
-        else ChatForegroundService.release(context, ChatForegroundService.Reason.BUILD)
-    }
-
     fun startBuild() {
         val project = projectStateHolder.activeProject.value ?: run {
-            _uiState.value = UiState.Failed("No active project. Open a file or select a project from the Projects tab.")
+            buildRunner.fail("No active project. Open a file or select a project from the Projects tab.")
             return
         }
-        viewModelScope.launch {
-            setLoading(true, project.name)
-            try {
-                _logs.value = emptyList()
-                _uiState.value = UiState.Building
-                buildStateHolder.onStarted()
-                diagnosticsStateHolder.clear()
-                val prefs = prefsRepository.preferences.first()
-                val timeoutMinutes = prefs.kotlinTimeoutMinutes
-                val kotlinTimeoutSeconds = timeoutMinutes * 60L
-                val compilerProfile = prefs.compilerPerformanceProfile
-                val allMessages = mutableListOf<String>()
-                val keystoreConfig = keystoreRepository.get()
-                buildEngine.build(
-                    project = project,
-                    kotlinTimeoutSeconds = kotlinTimeoutSeconds,
-                    compilerProfile = compilerProfile,
-                    keystoreConfig = keystoreConfig,
-                    variant = _variant.value,
-                    appBundle = _appBundle.value && _variant.value == BuildVariant.RELEASE,
-                ).collect { event ->
-                    when (event) {
-                        is BuildEvent.Log -> {
-                            _logs.update { it + event }
-                            buildStateHolder.onLog(event.message)
-                            allMessages += event.message
-                        }
-                        is BuildEvent.Success -> {
-                            val packageName = event.applicationId ?: project.packageName
-                            _uiState.value = UiState.Done(event.apkPath, packageName)
-                            refreshInstallState(packageName)
-                            // A bundle can't be installed; the last APK stays the one Install uses.
-                            if (!event.apkPath.endsWith(".aab")) buildStateHolder.onSuccess(event.apkPath, event.applicationId)
-                            diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
-                            recordBuildForAgents(project.rootPath, ok = true, "${_variant.value.name.lowercase()} build, ${java.io.File(event.apkPath).name}")
-                        }
-                        is BuildEvent.Failure -> {
-                            _uiState.value = UiState.Failed(event.error)
-                            buildStateHolder.onFailure(event.error)
-                            diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
-                            recordBuildForAgents(project.rootPath, ok = false, "${_variant.value.name.lowercase()} build, error: ${event.error.lineSequence().firstOrNull().orEmpty().take(300)}")
-                        }
-                        BuildEvent.Started -> Unit
-                    }
-                }
-            } finally {
-                setLoading(false)
-            }
-        }
+        buildRunner.start(project, _variant.value, _appBundle.value)
     }
 
-    /** Every agent (built-in, Claude Code, Antigravity) reads the last real build from .bori/handoff.md. */
-    private fun recordBuildForAgents(rootPath: String, ok: Boolean, summary: String) {
-        if (rootPath.isBlank()) return
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            runCatching { com.bori.core.project.agent.AgentFiles.appendBuildResult(java.io.File(rootPath), ok, summary) }
-        }
-    }
-
-    fun reset() {
-        _uiState.value = UiState.Idle
-        _logs.value = emptyList()
-    }
+    fun reset() = buildRunner.reset()
 }

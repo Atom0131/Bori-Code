@@ -33,6 +33,8 @@ class ChatForegroundService : Service() {
 
         private val active = mutableSetOf<Reason>()
         private var buildDetail: String? = null
+        /** startForegroundService was called and onStartCommand hasn't run yet. */
+        private var starting = false
         @Volatile private var instance: ChatForegroundService? = null
 
         /** [detail] names what's being built; it shows in the notification. */
@@ -46,20 +48,25 @@ class ChatForegroundService : Service() {
                 running.refresh()
                 return
             }
+            if (synchronized(active) { starting.also { starting = true } }) return
             try {
                 context.startForegroundService(Intent(context, ChatForegroundService::class.java))
             } catch (e: Exception) {
                 // ForegroundServiceStartNotAllowedException when started from the background.
                 Log.w(TAG, "Couldn't start keep-alive for $reason: ${e.message}")
+                synchronized(active) { starting = false }
             }
         }
 
         fun release(context: Context, reason: Reason) {
-            val empty = synchronized(active) {
+            val (empty, pending) = synchronized(active) {
                 active -= reason
                 if (reason == Reason.BUILD) buildDetail = null
-                active.isEmpty()
+                active.isEmpty() to starting
             }
+            // Stopping it before onStartCommand calls startForeground crashes the app
+            // (ForegroundServiceDidNotStartInTimeException); onStartCommand stops it itself instead.
+            if (empty && pending) return
             // stopService, never startService: starting a service from the background throws
             // BackgroundServiceStartNotAllowedException (BoriApp releases GEMMA on every cold start).
             if (empty) {
@@ -82,8 +89,9 @@ class ChatForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification())
-        if (synchronized(active) { active.isEmpty() }) {
+        if (synchronized(active) { starting = false; active.isEmpty() }) {
             // Every reason was released before the service got here.
+            instance = null
             stopSelf()
         } else {
             updateWakeLock()

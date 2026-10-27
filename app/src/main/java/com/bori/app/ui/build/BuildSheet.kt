@@ -1,4 +1,4 @@
-﻿package com.bori.app.ui.build
+package com.bori.app.ui.build
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +27,7 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import com.bori.app.data.build.BuildRunner
 import com.bori.core.build.model.BuildVariant
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -61,7 +62,7 @@ fun BuildSheet(
     val variant by viewModel.variant.collectAsState()
     val hasCustomKeystore by viewModel.hasCustomKeystore.collectAsState()
     val appBundle by viewModel.appBundle.collectAsState()
-    val isBuilding = uiState is BuildViewModel.UiState.Building
+    val isBuilding = uiState is BuildRunner.UiState.Building
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -75,7 +76,7 @@ fun BuildSheet(
     }
 
     // Re-check install state when user returns from system installer
-    val doneState = uiState as? BuildViewModel.UiState.Done
+    val doneState = uiState as? BuildRunner.UiState.Done
     DisposableEffect(lifecycleOwner, doneState?.packageName) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME && doneState != null) {
@@ -171,7 +172,7 @@ fun BuildSheet(
             }
 
             // Progress indicator while building
-            if (uiState is BuildViewModel.UiState.Building) {
+            if (uiState is BuildRunner.UiState.Building) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
@@ -200,7 +201,7 @@ fun BuildSheet(
                 }
 
                 // Empty state
-                if (logs.isEmpty() && uiState is BuildViewModel.UiState.Building) {
+                if (logs.isEmpty() && uiState is BuildRunner.UiState.Building) {
                     item {
                         Text(
                             text = "Build starting…",
@@ -213,7 +214,7 @@ fun BuildSheet(
 
             // Status line
             when (val state = uiState) {
-                is BuildViewModel.UiState.Done -> {
+                is BuildRunner.UiState.Done -> {
                     val sizeStr = remember(state.apkPath) {
                         val f = File(state.apkPath)
                         if (f.exists()) "  ·  ${formatApkSize(f.length())}" else ""
@@ -225,7 +226,7 @@ fun BuildSheet(
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
-                is BuildViewModel.UiState.Failed ->
+                is BuildRunner.UiState.Failed ->
                     Text(
                         "✗ ${state.error}",
                         style = MaterialTheme.typography.bodyMedium,
