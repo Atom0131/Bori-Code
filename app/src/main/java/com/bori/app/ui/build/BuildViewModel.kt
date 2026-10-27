@@ -90,16 +90,9 @@ class BuildViewModel @Inject constructor(
             ?.let { context.startActivity(it) }
     }
 
-    private fun setLoading(loading: Boolean) {
-        if (loading) {
-            val intent = Intent(context, ChatForegroundService::class.java)
-            context.startForegroundService(intent)
-        } else {
-            val intent = Intent(context, ChatForegroundService::class.java).apply {
-                action = ChatForegroundService.ACTION_STOP
-            }
-            context.startService(intent)
-        }
+    private fun setLoading(loading: Boolean, projectName: String? = null) {
+        if (loading) ChatForegroundService.acquire(context, ChatForegroundService.Reason.BUILD, projectName)
+        else ChatForegroundService.release(context, ChatForegroundService.Reason.BUILD)
     }
 
     fun startBuild() {
@@ -108,7 +101,7 @@ class BuildViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            setLoading(true)
+            setLoading(true, project.name)
             try {
                 _logs.value = emptyList()
                 _uiState.value = UiState.Building

@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.bori.app.data.build.KeystoreRepository
+import com.bori.app.service.ChatForegroundService
 import com.bori.core.build.BuildEngine
 import com.bori.core.build.model.BuildEvent
 import com.bori.core.build.model.BuildVariant
@@ -37,25 +38,31 @@ class DebugBuildReceiver : BroadcastReceiver() {
         val variant = if (intent.getBooleanExtra("release", false)) BuildVariant.RELEASE else BuildVariant.DEBUG
         val outDir = File(context.getExternalFilesDir(null), "build-out").also { it.mkdirs() }
         val log = File(outDir, "$name.log").also { it.writeText("") }
+        val app = context.applicationContext
+        ChatForegroundService.acquire(app, ChatForegroundService.Reason.BUILD, name)
         scope.launch {
-            val project = projectRepository.upsertFromPath(File(ProjectRepository.PROJECTS_ROOT, name).absolutePath)
-            val keystore = intent.getStringExtra("ks")?.let { ks ->
-                val pass = intent.getStringExtra("pass").orEmpty()
-                KeystoreConfig(ks, intent.getStringExtra("alias").orEmpty(), pass, pass)
-            } ?: if (variant == BuildVariant.RELEASE) keystoreRepository.get() else null
-            val bundle = intent.getBooleanExtra("bundle", false)
-            buildEngine.build(project, keystoreConfig = keystore, variant = variant, appBundle = bundle).collect { event ->
-                when (event) {
-                    is BuildEvent.Log -> log.appendText(event.message + "\n")
-                    is BuildEvent.Success -> {
-                        val apk = File(event.apkPath)
-                        val copy = File(outDir, "$name.${apk.extension}")
-                        apk.copyTo(copy, overwrite = true)
-                        log.appendText("RESULT OK ${copy.absolutePath}\n")
+            try {
+                val project = projectRepository.upsertFromPath(File(ProjectRepository.PROJECTS_ROOT, name).absolutePath)
+                val keystore = intent.getStringExtra("ks")?.let { ks ->
+                    val pass = intent.getStringExtra("pass").orEmpty()
+                    KeystoreConfig(ks, intent.getStringExtra("alias").orEmpty(), pass, pass)
+                } ?: if (variant == BuildVariant.RELEASE) keystoreRepository.get() else null
+                val bundle = intent.getBooleanExtra("bundle", false)
+                buildEngine.build(project, keystoreConfig = keystore, variant = variant, appBundle = bundle).collect { event ->
+                    when (event) {
+                        is BuildEvent.Log -> log.appendText(event.message + "\n")
+                        is BuildEvent.Success -> {
+                            val apk = File(event.apkPath)
+                            val copy = File(outDir, "$name.${apk.extension}")
+                            apk.copyTo(copy, overwrite = true)
+                            log.appendText("RESULT OK ${copy.absolutePath}\n")
+                        }
+                        is BuildEvent.Failure -> log.appendText("RESULT FAIL ${event.error}\n")
+                        BuildEvent.Started -> Unit
                     }
-                    is BuildEvent.Failure -> log.appendText("RESULT FAIL ${event.error}\n")
-                    BuildEvent.Started -> Unit
                 }
+            } finally {
+                ChatForegroundService.release(app, ChatForegroundService.Reason.BUILD)
             }
         }
     }

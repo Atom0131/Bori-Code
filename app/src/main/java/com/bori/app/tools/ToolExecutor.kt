@@ -9,6 +9,7 @@ import com.bori.app.data.build.BuildStateHolder
 import com.bori.app.data.build.DiagnosticsStateHolder
 import com.bori.app.data.prefs.UserPreferencesRepository
 import com.bori.app.data.project.ProjectStateHolder
+import com.bori.app.service.ChatForegroundService
 import com.bori.core.build.BuildEngine
 import com.bori.core.build.model.BuildEvent
 import com.bori.core.build.model.BuildVariant
@@ -299,19 +300,24 @@ class ToolExecutor @Inject constructor(
         var apkPath: String? = null
         var errorMsg: String? = null
 
-        buildEngine.build(
-            project = project,
-            kotlinTimeoutSeconds = timeoutMinutes * 60L,
-            compilerProfile = compilerProfile,
-            keystoreConfig = null,
-            variant = BuildVariant.DEBUG,
-        ).collect { event ->
-            when (event) {
-                is BuildEvent.Log     -> { allLogs += event.message; buildStateHolder.onLog(event.message) }
-                is BuildEvent.Success -> { status = "success"; apkPath = event.apkPath; buildStateHolder.onSuccess(event.apkPath, event.applicationId) }
-                is BuildEvent.Failure -> { errorMsg = event.error; buildStateHolder.onFailure(event.error) }
-                BuildEvent.Started    -> Unit
+        ChatForegroundService.acquire(context, ChatForegroundService.Reason.BUILD, project.name)
+        try {
+            buildEngine.build(
+                project = project,
+                kotlinTimeoutSeconds = timeoutMinutes * 60L,
+                compilerProfile = compilerProfile,
+                keystoreConfig = null,
+                variant = BuildVariant.DEBUG,
+            ).collect { event ->
+                when (event) {
+                    is BuildEvent.Log     -> { allLogs += event.message; buildStateHolder.onLog(event.message) }
+                    is BuildEvent.Success -> { status = "success"; apkPath = event.apkPath; buildStateHolder.onSuccess(event.apkPath, event.applicationId) }
+                    is BuildEvent.Failure -> { errorMsg = event.error; buildStateHolder.onFailure(event.error) }
+                    BuildEvent.Started    -> Unit
+                }
             }
+        } finally {
+            ChatForegroundService.release(context, ChatForegroundService.Reason.BUILD)
         }
 
         if (project.rootPath.isNotBlank()) {

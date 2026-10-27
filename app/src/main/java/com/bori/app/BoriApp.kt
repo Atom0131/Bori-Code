@@ -34,8 +34,8 @@ class BoriApp : Application() {
         appScope.launch {
             localGemmaClient.inferenceState.collect { state ->
                 when (state) {
-                    is InferenceState.Ready -> ChatForegroundService.start(this@BoriApp)
-                    is InferenceState.Idle  -> ChatForegroundService.stop(this@BoriApp)
+                    is InferenceState.Ready -> ChatForegroundService.acquire(this@BoriApp, ChatForegroundService.Reason.GEMMA)
+                    is InferenceState.Idle  -> ChatForegroundService.release(this@BoriApp, ChatForegroundService.Reason.GEMMA)
                     else -> {}
                 }
             }

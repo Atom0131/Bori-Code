@@ -1,7 +1,6 @@
-﻿package com.bori.app.ui.chat
+package com.bori.app.ui.chat
 
 import android.content.Context
-import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bori.app.data.db.ChatMessageDao
@@ -203,15 +202,8 @@ class ChatViewModel @Inject constructor(
     private fun setLoading(loading: Boolean) {
         _isLoading.value = loading
         if (!loading) releaseAgentLock()
-        if (loading) {
-            val intent = Intent(context, ChatForegroundService::class.java)
-            context.startForegroundService(intent)
-        } else {
-            val intent = Intent(context, ChatForegroundService::class.java).apply {
-                action = ChatForegroundService.ACTION_STOP
-            }
-            context.startService(intent)
-        }
+        if (loading) ChatForegroundService.acquire(context, ChatForegroundService.Reason.CHAT)
+        else ChatForegroundService.release(context, ChatForegroundService.Reason.CHAT)
     }
 
     private val _messages = MutableStateFlow<List<ChatMessageEntity>>(emptyList())
