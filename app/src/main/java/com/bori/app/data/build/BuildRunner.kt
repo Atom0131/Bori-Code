@@ -34,6 +34,7 @@ class BuildRunner @Inject constructor(
     private val diagnosticsStateHolder: DiagnosticsStateHolder,
     private val prefsRepository: UserPreferencesRepository,
     private val keystoreRepository: KeystoreRepository,
+    private val buildLock: BuildLock,
     @ApplicationContext private val context: Context,
 ) {
     sealed class UiState {
@@ -62,34 +63,36 @@ class BuildRunner @Inject constructor(
                 diagnosticsStateHolder.clear()
                 val prefs = prefsRepository.preferences.first()
                 val allMessages = mutableListOf<String>()
-                buildEngine.build(
-                    project = project,
-                    kotlinTimeoutSeconds = prefs.kotlinTimeoutMinutes * 60L,
-                    compilerProfile = prefs.compilerPerformanceProfile,
-                    keystoreConfig = keystoreRepository.get(),
-                    variant = variant,
-                    appBundle = appBundle && variant == BuildVariant.RELEASE,
-                ).collect { event ->
-                    when (event) {
-                        is BuildEvent.Log -> {
-                            _logs.update { it + event }
-                            buildStateHolder.onLog(event.message)
-                            allMessages += event.message
+                buildLock.withLock(onWait = { _logs.update { it + BuildEvent.Log(BuildLock.WAITING) } }) {
+                    buildEngine.build(
+                        project = project,
+                        kotlinTimeoutSeconds = prefs.kotlinTimeoutMinutes * 60L,
+                        compilerProfile = prefs.compilerPerformanceProfile,
+                        keystoreConfig = keystoreRepository.get(),
+                        variant = variant,
+                        appBundle = appBundle && variant == BuildVariant.RELEASE,
+                    ).collect { event ->
+                        when (event) {
+                            is BuildEvent.Log -> {
+                                _logs.update { it + event }
+                                buildStateHolder.onLog(event.message)
+                                allMessages += event.message
+                            }
+                            is BuildEvent.Success -> {
+                                _uiState.value = UiState.Done(event.apkPath, event.applicationId ?: project.packageName)
+                                // A bundle can't be installed; the last APK stays the one Install uses.
+                                if (!event.apkPath.endsWith(".aab")) buildStateHolder.onSuccess(event.apkPath, event.applicationId)
+                                diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
+                                recordBuildForAgents(project.rootPath, ok = true, "${variant.name.lowercase()} build, ${File(event.apkPath).name}")
+                            }
+                            is BuildEvent.Failure -> {
+                                _uiState.value = UiState.Failed(event.error)
+                                buildStateHolder.onFailure(event.error)
+                                diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
+                                recordBuildForAgents(project.rootPath, ok = false, "${variant.name.lowercase()} build, error: ${event.error.lineSequence().firstOrNull().orEmpty().take(300)}")
+                            }
+                            BuildEvent.Started -> Unit
                         }
-                        is BuildEvent.Success -> {
-                            _uiState.value = UiState.Done(event.apkPath, event.applicationId ?: project.packageName)
-                            // A bundle can't be installed; the last APK stays the one Install uses.
-                            if (!event.apkPath.endsWith(".aab")) buildStateHolder.onSuccess(event.apkPath, event.applicationId)
-                            diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
-                            recordBuildForAgents(project.rootPath, ok = true, "${variant.name.lowercase()} build, ${File(event.apkPath).name}")
-                        }
-                        is BuildEvent.Failure -> {
-                            _uiState.value = UiState.Failed(event.error)
-                            buildStateHolder.onFailure(event.error)
-                            diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
-                            recordBuildForAgents(project.rootPath, ok = false, "${variant.name.lowercase()} build, error: ${event.error.lineSequence().firstOrNull().orEmpty().take(300)}")
-                        }
-                        BuildEvent.Started -> Unit
                     }
                 }
             } catch (e: Exception) {

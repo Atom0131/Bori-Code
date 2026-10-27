@@ -49,6 +49,7 @@ class ToolExecutor @Inject constructor(
     private val projectRepository: com.bori.core.project.ProjectRepository,
     private val prefsRepository: UserPreferencesRepository,
     private val keyVault: KeyVault,
+    private val buildLock: com.bori.app.data.build.BuildLock,
 ) {
 
     private val httpClient: OkHttpClient by lazy {
@@ -302,18 +303,20 @@ class ToolExecutor @Inject constructor(
 
         ChatForegroundService.acquire(context, ChatForegroundService.Reason.BUILD, project.name)
         try {
-            buildEngine.build(
-                project = project,
-                kotlinTimeoutSeconds = timeoutMinutes * 60L,
-                compilerProfile = compilerProfile,
-                keystoreConfig = null,
-                variant = BuildVariant.DEBUG,
-            ).collect { event ->
-                when (event) {
-                    is BuildEvent.Log     -> { allLogs += event.message; buildStateHolder.onLog(event.message) }
-                    is BuildEvent.Success -> { status = "success"; apkPath = event.apkPath; buildStateHolder.onSuccess(event.apkPath, event.applicationId) }
-                    is BuildEvent.Failure -> { errorMsg = event.error; buildStateHolder.onFailure(event.error) }
-                    BuildEvent.Started    -> Unit
+            buildLock.withLock(onWait = { buildStateHolder.onLog(com.bori.app.data.build.BuildLock.WAITING) }) {
+                buildEngine.build(
+                    project = project,
+                    kotlinTimeoutSeconds = timeoutMinutes * 60L,
+                    compilerProfile = compilerProfile,
+                    keystoreConfig = null,
+                    variant = BuildVariant.DEBUG,
+                ).collect { event ->
+                    when (event) {
+                        is BuildEvent.Log     -> { allLogs += event.message; buildStateHolder.onLog(event.message) }
+                        is BuildEvent.Success -> { status = "success"; apkPath = event.apkPath; buildStateHolder.onSuccess(event.apkPath, event.applicationId) }
+                        is BuildEvent.Failure -> { errorMsg = event.error; buildStateHolder.onFailure(event.error) }
+                        BuildEvent.Started    -> Unit
+                    }
                 }
             }
         } finally {

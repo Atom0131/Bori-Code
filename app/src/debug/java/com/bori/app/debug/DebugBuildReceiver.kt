@@ -3,6 +3,7 @@ package com.bori.app.debug
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import com.bori.app.data.build.BuildLock
 import com.bori.app.data.build.KeystoreRepository
 import com.bori.app.service.ChatForegroundService
 import com.bori.core.build.BuildEngine
@@ -32,6 +33,7 @@ class DebugBuildReceiver : BroadcastReceiver() {
     @Inject lateinit var buildEngine: BuildEngine
     @Inject lateinit var projectRepository: ProjectRepository
     @Inject lateinit var keystoreRepository: KeystoreRepository
+    @Inject lateinit var buildLock: BuildLock
 
     override fun onReceive(context: Context, intent: Intent) {
         val name = intent.getStringExtra("project") ?: return
@@ -48,17 +50,19 @@ class DebugBuildReceiver : BroadcastReceiver() {
                     KeystoreConfig(ks, intent.getStringExtra("alias").orEmpty(), pass, pass)
                 } ?: if (variant == BuildVariant.RELEASE) keystoreRepository.get() else null
                 val bundle = intent.getBooleanExtra("bundle", false)
-                buildEngine.build(project, keystoreConfig = keystore, variant = variant, appBundle = bundle).collect { event ->
-                    when (event) {
-                        is BuildEvent.Log -> log.appendText(event.message + "\n")
-                        is BuildEvent.Success -> {
-                            val apk = File(event.apkPath)
-                            val copy = File(outDir, "$name.${apk.extension}")
-                            apk.copyTo(copy, overwrite = true)
-                            log.appendText("RESULT OK ${copy.absolutePath}\n")
+                buildLock.withLock(onWait = { log.appendText(BuildLock.WAITING + "\n") }) {
+                    buildEngine.build(project, keystoreConfig = keystore, variant = variant, appBundle = bundle).collect { event ->
+                        when (event) {
+                            is BuildEvent.Log -> log.appendText(event.message + "\n")
+                            is BuildEvent.Success -> {
+                                val apk = File(event.apkPath)
+                                val copy = File(outDir, "$name.${apk.extension}")
+                                apk.copyTo(copy, overwrite = true)
+                                log.appendText("RESULT OK ${copy.absolutePath}\n")
+                            }
+                            is BuildEvent.Failure -> log.appendText("RESULT FAIL ${event.error}\n")
+                            BuildEvent.Started -> Unit
                         }
-                        is BuildEvent.Failure -> log.appendText("RESULT FAIL ${event.error}\n")
-                        BuildEvent.Started -> Unit
                     }
                 }
             } finally {

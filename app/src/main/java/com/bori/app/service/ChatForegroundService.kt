@@ -33,6 +33,8 @@ class ChatForegroundService : Service() {
 
         private val active = mutableSetOf<Reason>()
         private var buildDetail: String? = null
+        /** Builds can overlap (one waits on BuildLock), so BUILD is held until the last one releases. */
+        private var buildHolders = 0
         /** startForegroundService was called and onStartCommand hasn't run yet. */
         private var starting = false
         @Volatile private var instance: ChatForegroundService? = null
@@ -41,7 +43,10 @@ class ChatForegroundService : Service() {
         fun acquire(context: Context, reason: Reason, detail: String? = null) {
             synchronized(active) {
                 active += reason
-                if (reason == Reason.BUILD) buildDetail = detail
+                if (reason == Reason.BUILD) {
+                    buildHolders++
+                    buildDetail = detail
+                }
             }
             val running = instance
             if (running != null) {
@@ -60,8 +65,13 @@ class ChatForegroundService : Service() {
 
         fun release(context: Context, reason: Reason) {
             val (empty, pending) = synchronized(active) {
-                active -= reason
-                if (reason == Reason.BUILD) buildDetail = null
+                if (reason != Reason.BUILD || --buildHolders <= 0) {
+                    active -= reason
+                    if (reason == Reason.BUILD) {
+                        buildHolders = 0
+                        buildDetail = null
+                    }
+                }
                 active.isEmpty() to starting
             }
             // Stopping it before onStartCommand calls startForeground crashes the app
@@ -102,7 +112,7 @@ class ChatForegroundService : Service() {
     /** dataSync services are capped at 6 h a day on Android 15+; stop in time instead of crashing. */
     override fun onTimeout(startId: Int, fgsType: Int) {
         Log.w(TAG, "Foreground time limit reached; stopping keep-alive")
-        synchronized(active) { active.clear() }
+        synchronized(active) { active.clear(); buildHolders = 0 }
         stopSelf()
     }
 
