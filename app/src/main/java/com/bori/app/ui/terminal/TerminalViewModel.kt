@@ -12,7 +12,6 @@ import com.bori.app.terminal.ShellKind
 import com.bori.app.terminal.Split
 import com.bori.app.terminal.TerminalSessionManager
 import com.bori.app.terminal.TerminalTab
-import com.bori.app.terminal.TerminalWords
 import com.termux.terminal.TerminalSession
 import kotlinx.coroutines.delay
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -35,8 +34,6 @@ class TerminalViewModel @Inject constructor(
     private val manager: TerminalSessionManager,
     private val projectStateHolder: ProjectStateHolder,
     private val sessionState: SessionStateStore,
-    /** Bori Keyboard's dictionaries and learned words, for the terminal keys. */
-    val words: TerminalWords,
 ) : ViewModel() {
 
     val tabs: StateFlow<List<TerminalTab>> = manager.tabs

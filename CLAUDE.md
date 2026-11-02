@@ -30,7 +30,7 @@ on-device Gemma 4 E2B/E4B via LiteRT-LM).
 | `:core:security` | `core/security/` | `KeyVault` (EncryptedSharedPreferences), `AiProvider` enum |
 | `:core:linux` | `core/linux/` | **Full flavor only.** proot launcher, distro installer, guest policy, Claude Code / Antigravity chat clients (`cli/`) |
 | `:core:terminal` | `core/terminal/` | Vendored Termux terminal-emulator / terminal-view (Apache-2.0, see its NOTICE) |
-| `:core:keyboard` | `core/keyboard/` | Bori Keyboard's typing engine for the terminal keys: dictionaries, spell correction, glide decoder, learning (GPL-3.0; dictionaries CC BY-SA 4.0, see its ATTRIBUTION.md). A copy of the bori-keyboard project's engine; sync changes by hand |
+| `:core:keyboard` | `core/keyboard/` | Bori Keyboard itself for the terminal: dictionaries, correction, glide, learning, and its keyboard views + `TypingSession` (GPL-3.0; dictionaries CC BY-SA 4.0, see its ATTRIBUTION.md). Copied from the bori-keyboard project (written inside Bori Code on the phone) by `scripts/sync_bori_keyboard.sh`, which applies the same small patches each time; don't edit the copied files, change the script or `ime/InputHost.kt` (Bori Code's own). The app hosts it in `ui/terminal/BoriKeys.kt` |
 
 Dependency direction: `app → core:{ai,build,editor,project,security,terminal,keyboard}` (+ `core:linux`
 in the full flavor only); `core:ai → core:security, core:editor`; `core:build → core:project`;
@@ -117,6 +117,9 @@ and ECJ 3.32 (Java up to 17, patched for Android 8+ by the `patchEcj` task).
   `data/prefs/SessionStateStore`. Chat/Code/Terminal/Projects ViewModels are activity-scoped.
   `ui/adaptive/WindowLayout` gives the width class and hinge; screen Scaffolds use `ShellContentInsets`.
 - Terminal panes: `terminal/PaneLayout.kt` + `TerminalSessionManager.layout` (one session per pane).
+- Terminal keyboard: top bar keys go straight to the terminal; text is typed into the type bar (Bori Keyboard or
+  the phone's keyboard) and Enter sends the line (`ui/terminal/TerminalKeyboard.kt`, `BoriKeys.kt`). Closing a
+  tab kills its whole process tree (`terminal/ProcessReaper.kt`): proot killed alone leaves programs spinning on a dead PTY.
 - Preferences: `app/.../data/prefs/UserPreferencesRepository.kt` (auto-sanitizes
   stale model IDs; also caches each provider's live model list from Settings →
   "Refresh models").

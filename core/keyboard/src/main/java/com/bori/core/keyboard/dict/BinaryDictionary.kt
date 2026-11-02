@@ -1,17 +1,20 @@
 package com.bori.core.keyboard.dict
 
 import android.content.Context
+import java.io.EOFException
+import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
  * Read-only word trie with frequencies and next-word bigrams, in the .bdic format written
- * by tools/build_dict.py (see that file for the byte layout). Everything is bulk-loaded
- * into primitive arrays, so lookups allocate nothing.
+ * by tools/build_dict.py (see that file for the byte layout). Everything is streamed
+ * straight into primitive arrays (no whole-file buffer: the file is ~19 MB), so lookups
+ * allocate nothing.
  *
  * Trie keys are lowercase; [wordOf] restores the dictionary's capitalisation ("I", "Spain").
  */
-class BinaryDictionary private constructor(buf: ByteBuffer) {
+class BinaryDictionary private constructor(r: Reader) {
 
     val nodeCount: Int
     val wordCount: Int
@@ -32,38 +35,44 @@ class BinaryDictionary private constructor(buf: ByteBuffer) {
     private val bigramNext: IntArray
     private val bigramCost: ByteArray
 
+    /**
+     * Known typos of common words (typo → word), from assets/dict/<lang>_typos.txt
+     * (tools/build_typos.py). Set once by [Dictionaries] before the dictionary is handed out.
+     */
+    var typos: Map<String, String> = emptyMap()
+        internal set
+
     init {
-        buf.order(ByteOrder.LITTLE_ENDIAN)
-        val magic = ByteArray(4).also { buf.get(it) }
+        val magic = ByteArray(4).also { r.bytes(it) }
         require(String(magic, Charsets.US_ASCII) == "BDIC") { "Not a .bdic file" }
-        val version = buf.short.toInt()
+        val version = r.short()
         require(version == 1) { "Unsupported .bdic version $version" }
-        buf.short
-        nodeCount = buf.int
-        logRange = buf.float
-        wordCount = buf.int
+        r.short()
+        nodeCount = r.int()
+        logRange = r.float()
+        wordCount = r.int()
         val n = nodeCount
-        chars = CharArray(n).also { buf.asCharBuffer().get(it); buf.position(buf.position() + 2 * n) }
-        parent = ints(buf, n)
-        first = ints(buf, n)
-        childCount = bytes(buf, n)
-        freq = bytes(buf, n)
-        maxFreq = bytes(buf, n)
-        flags = bytes(buf, n)
-        align(buf)
-        repeat(buf.int) {
-            val node = buf.int
-            val len = buf.short.toInt() and 0xFFFF
-            val b = ByteArray(len).also { buf.get(it) }
+        chars = CharArray(n).also { r.chars(it) }
+        parent = IntArray(n).also { r.ints(it) }
+        first = IntArray(n).also { r.ints(it) }
+        childCount = ByteArray(n).also { r.bytes(it) }
+        freq = ByteArray(n).also { r.bytes(it) }
+        maxFreq = ByteArray(n).also { r.bytes(it) }
+        flags = ByteArray(n).also { r.bytes(it) }
+        r.align4()
+        repeat(r.int()) {
+            val node = r.int()
+            val len = r.short()
+            val b = ByteArray(len).also { r.bytes(it) }
             display[node] = String(b, Charsets.UTF_8)
         }
-        align(buf)
-        val m = buf.int
-        bigramPrev = ints(buf, m)
-        bigramStart = ints(buf, m + 1)
+        r.align4()
+        val m = r.int()
+        bigramPrev = IntArray(m).also { r.ints(it) }
+        bigramStart = IntArray(m + 1).also { r.ints(it) }
         val k = bigramStart[m]
-        bigramNext = ints(buf, k)
-        bigramCost = bytes(buf, k)
+        bigramNext = IntArray(k).also { r.ints(it) }
+        bigramCost = ByteArray(k).also { r.bytes(it) }
     }
 
     // ---------------------------------------------------------------- trie access
@@ -86,6 +95,15 @@ class BinaryDictionary private constructor(buf: ByteBuffer) {
 
     /** Everyday slang and modern words from the word lists: never "fixed" into another word. */
     fun keepsAsTyped(node: Int): Boolean = flags[node].toInt() and F_KEEP != 0
+
+    /** No corpus frequency at all (mostly Wiktionary-only words): weakly valid, never swiped. */
+    fun isRare(node: Int): Boolean = flags[node].toInt() and F_RARE != 0
+
+    /**
+     * Only weakly valid: a rare word, or one added from Wiktionary (flag 64, swipeable). Typed
+     * exactly it stays unless a fix clearly outscores it (Suggester.RARE_TYPED_BONUS).
+     */
+    fun isWeak(node: Int): Boolean = flags[node].toInt() and (F_RARE or F_WEAK) != 0
 
     /** Ordinary word: not all caps (abbreviations like "GI") and no special display form. */
     fun isPlainWord(node: Int): Boolean = flags[node].toInt() and (F_ALL_CAPS or F_CUSTOM) == 0
@@ -176,27 +194,94 @@ class BinaryDictionary private constructor(buf: ByteBuffer) {
         private const val F_NOSUGGEST = 4
         private const val F_CUSTOM = 8
         private const val F_KEEP = 16
+        private const val F_RARE = 32
+        private const val F_WEAK = 64
 
         /** Puts the commonest words near ln P = -4 (about 2%), like real text. */
         private const val UNIGRAM_OFFSET = 4f
 
-        fun fromAsset(context: Context, path: String): BinaryDictionary {
-            val bytes = context.assets.open(path).use { it.readBytes() }
-            return BinaryDictionary(ByteBuffer.wrap(bytes))
+        fun fromAsset(context: Context, path: String): BinaryDictionary =
+            context.assets.open(path).use { BinaryDictionary(Reader(it)) }
+
+        /** Reads a "typo<TAB>word" list; missing or unreadable files give an empty map. */
+        fun typosFromAsset(context: Context, path: String): Map<String, String> {
+            val out = HashMap<String, String>(32768)
+            runCatching {
+                context.assets.open(path).bufferedReader().useLines { lines ->
+                    for (line in lines) {
+                        if (line.startsWith("#")) continue
+                        val tab = line.indexOf('\t')
+                        if (tab > 0 && tab < line.length - 1) out[line.substring(0, tab)] = line.substring(tab + 1)
+                    }
+                }
+            }
+            return out
+        }
+    }
+
+    /** Little-endian reader over a stream with a small reusable chunk buffer. */
+    private class Reader(private val input: InputStream) {
+        private val buf = ByteBuffer.allocate(CHUNK).order(ByteOrder.LITTLE_ENDIAN).also { it.limit(0) }
+        private var pos = 0L
+
+        /** Makes at least [n] (<= CHUNK) bytes available in [buf]. */
+        private fun need(n: Int) {
+            if (buf.remaining() >= n) return
+            buf.compact()
+            while (buf.position() < n) {
+                val read = input.read(buf.array(), buf.position(), buf.capacity() - buf.position())
+                if (read < 0) throw EOFException("Truncated .bdic file")
+                buf.position(buf.position() + read)
+            }
+            buf.flip()
         }
 
-        private fun ints(buf: ByteBuffer, n: Int): IntArray {
-            val a = IntArray(n)
-            buf.asIntBuffer().get(a)
-            buf.position(buf.position() + 4 * n)
-            return a
+        fun short(): Int { need(2); pos += 2; return buf.short.toInt() and 0xFFFF }
+        fun int(): Int { need(4); pos += 4; return buf.int }
+        fun float(): Float { need(4); pos += 4; return buf.float }
+
+        fun bytes(out: ByteArray) {
+            var off = 0
+            while (off < out.size) {
+                need(1)
+                val k = minOf(buf.remaining(), out.size - off)
+                buf.get(out, off, k)
+                off += k
+            }
+            pos += out.size
         }
 
-        private fun bytes(buf: ByteBuffer, n: Int): ByteArray = ByteArray(n).also { buf.get(it) }
+        fun ints(out: IntArray) {
+            var off = 0
+            while (off < out.size) {
+                need(4)
+                val k = minOf(buf.remaining() / 4, out.size - off)
+                buf.asIntBuffer().get(out, off, k)
+                buf.position(buf.position() + 4 * k)
+                off += k
+            }
+            pos += 4L * out.size
+        }
 
-        private fun align(buf: ByteBuffer) {
-            val p = buf.position()
-            buf.position((p + 3) and 3.inv())
+        fun chars(out: CharArray) {
+            var off = 0
+            while (off < out.size) {
+                need(2)
+                val k = minOf(buf.remaining() / 2, out.size - off)
+                buf.asCharBuffer().get(out, off, k)
+                buf.position(buf.position() + 2 * k)
+                off += k
+            }
+            pos += 2L * out.size
+        }
+
+        fun align4() {
+            val pad = ((4 - (pos and 3)) and 3).toInt()
+            if (pad > 0) { need(pad); buf.position(buf.position() + pad); pos += pad }
+        }
+
+        private companion object {
+            const val CHUNK = 64 * 1024
         }
     }
 }

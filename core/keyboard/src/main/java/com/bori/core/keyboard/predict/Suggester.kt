@@ -57,6 +57,12 @@ class Suggester(
         val m = key.length
         val prevNode = prevNodeOf(ctx)
         corrector.search(key, composer, prox)
+        val typedNode = dict.findWord(key)
+        var dictNode = typedNode
+        // A weakly valid word (rare, or added from Wiktionary) typed exactly only stays if no fix
+        // outscores it by RARE_TYPED_BONUS; a listed typo that happens to be one is just a typo.
+        val rareTyped = typedNode >= 0 && dict.isWeak(typedNode)
+        if (rareTyped && dict.typos.containsKey(key)) dictNode = -1
 
         val byKey = HashMap<String, Suggestion>()
         fun offer(word: String, score: Float, kind: Suggestion.Kind, cost: Float, node: Int = -1) {
@@ -69,7 +75,12 @@ class Suggester(
         for ((node, cost) in corrector.matches) {
             if (blockOffensive && dict.isOffensive(node)) continue
             val kind = if (cost == 0f) Suggestion.Kind.EXACT else Suggestion.Kind.CORRECTION
-            offer(dict.wordOf(node), lm(node, prevNode, ctx) - COST_WEIGHT * cost, kind, cost, node)
+            var score = lm(node, prevNode, ctx) - COST_WEIGHT * cost
+            if (rareTyped && node == typedNode) {
+                if (dictNode < 0) continue
+                score += RARE_TYPED_BONUS
+            }
+            offer(dict.wordOf(node), score, kind, cost, node)
         }
         val prefixList = corrector.prefixes.entries.sortedBy { it.value }.take(MAX_PREFIXES)
         for ((pnode, pcost) in prefixList) {
@@ -95,9 +106,21 @@ class Suggester(
             }
         }
 
-        val dictNode = dict.findWord(key)
-        val learned = user.isLearned(key)
-        val typedValid = dictNode >= 0 || learned || isShouting(typed)
+        // A known typo of a common word ("rhe", "teh", "adn"): offered as a strong correction.
+        if (dictNode < 0 || rareTyped) {
+            dict.typos[key]?.let { fix ->
+                val node = dict.findWord(fix.lowercase(locale))
+                if (node >= 0 && !(blockOffensive && dict.isOffensive(node))) {
+                    offer(dict.wordOf(node), lm(node, prevNode, ctx) - COST_WEIGHT * TYPO_LIST_COST + TYPO_LIST_BONUS,
+                        Suggestion.Kind.CORRECTION, TYPO_LIST_COST, node)
+                }
+            }
+        }
+        // Only words the user confirmed (personal dictionary, an undone fix, picked as typed)
+        // are never fixed. Words merely typed twice still lose to a likelier fix: slips like
+        // "rhe" were committed (and learned) for as long as they weren't corrected.
+        val confirmed = user.isPersonal(key) || user.keptCount(key) >= 1
+        val typedValid = (dictNode >= 0 && !rareTyped) || confirmed || isShouting(typed)
         var ranked = byKey.values.sortedByDescending { it.score }
         var auto = chooseAutocorrect(composer, key, typedValid, ranked, level, ctx, prevNode, dictNode)
         if (!typedValid && level != Aggressiveness.OFF && !composer.autocorrectSuppressed) {
@@ -138,6 +161,8 @@ class Suggester(
         }
         // Only the best-ranked correction may be applied; never fall back to a worse one.
         val best = ranked.firstOrNull { it.kind != Suggestion.Kind.COMPLETION } ?: return null
+        // An unconfirmed learned word that still ranks first stays as typed.
+        if (best.word.lowercase(locale) == key) return null
         val m = key.length
         val lower = best.word.lowercase(locale)
         // "hel" → "he" just drops what the user typed last; they were probably mid-word.
@@ -337,6 +362,12 @@ class Suggester(
         const val BIGRAM_MISSING = 0.65f
         const val USER_WORD_BOOST = 0.6f
         const val USER_PAIR_BOOST = 1.0f
+        /** A listed typo (tools/build_typos.py) is offered as its word at this edit cost... */
+        const val TYPO_LIST_COST = 0.3f
+        /** ...plus this score bonus, so it beats look-alikes the taps alone can't rule out. */
+        const val TYPO_LIST_BONUS = 0.5f
+        /** How much a fix must outscore a rare word typed exactly (tools/typo_bench.py set V). */
+        const val RARE_TYPED_BONUS = 3.0f
         /** ln P for a learned word the dictionary doesn't know, before boosts. */
         const val LEARNED_BASE = -11f
         const val MAX_PREFIXES = 12
@@ -374,8 +405,11 @@ class Suggester(
                 n <= 3 -> 1.0f
                 n <= 4 -> 1.3f
                 n < 7 -> 1.6f
-                // Long words survive two slips and stay unambiguous (tools/typo_bench.py set D).
-                else -> 2.0f
+                // Long words survive two or three slips and stay unambiguous
+                // (tools/typo_bench.py sets D1/D2/E, tools/shape_bench.py).
+                n <= 7 -> 2.0f
+                n <= 10 -> 2.3f
+                else -> 2.7f
             }
             return when (level) {
                 Aggressiveness.OFF -> -1f

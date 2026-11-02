@@ -7,7 +7,6 @@ import android.content.res.Configuration
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.inputmethod.InputMethodManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -71,6 +70,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -93,9 +93,7 @@ import com.bori.app.terminal.PaneLayout
 import com.bori.app.terminal.ShellKind
 import com.bori.app.terminal.Split
 import com.bori.app.terminal.TerminalTab
-import com.bori.app.terminal.TerminalTyping
-import com.bori.core.keyboard.layout.Language
-import com.bori.core.keyboard.predict.Aggressiveness
+import com.bori.app.terminal.ShellPrompt
 import com.bori.app.ui.adaptive.LocalAppChrome
 import com.bori.app.ui.workspace.LocalPaneVisible
 import com.bori.app.ui.common.BoriTopBar
@@ -175,30 +173,6 @@ fun TerminalScreen(
     var terminalKeys by LocalAppChrome.current.terminalKeys
     LaunchedEffect(showingKeys) { terminalKeys = showingKeys }
     DisposableEffect(Unit) { onDispose { terminalKeys = false } }
-    // Switching keyboards: the phone's comes up at once, and goes away for Bori's keys. Done here, on the
-    // tap, so the saved choice loading or the terminal coming into view never pops or closes a keyboard.
-    val hostView = LocalView.current
-    // Bumped to put the cursor in the typing box (and bring up the phone's keyboard) on a switch.
-    var focusLineBox by remember { mutableStateOf(0) }
-    val switchKeyboard: (Boolean) -> Unit = { system ->
-        val imm = hostView.context.getSystemService(InputMethodManager::class.java)
-        viewModel.setSystemKeyboard(system)
-        val v = views[focusedSlot.value]
-        if (v != null) {
-            v.setSoftKeyboardEnabled(system)
-            v.requestFocus()
-            // The view's editor status changed; let the IME see it.
-            imm?.restartInput(v)
-        }
-        if (system) {
-            focusLineBox++
-        } else {
-            imm?.hideSoftInputFromWindow(hostView.windowToken, 0)
-            openKeys()
-        }
-    }
-
-    val keysSettings by viewModel.keysSettings.collectAsStateWithLifecycle()
     // Keys go to the focused pane; one-shot Ctrl/Alt apply to them too (Ctrl+← moves by word, Shift+Tab for TUIs).
     val sendKeyCode: (Int, Boolean) -> Unit = { code, shift ->
         val view = views[focusedSlot.value]
@@ -209,31 +183,58 @@ fun TerminalScreen(
             view.handleKeyCode(code, mod)
         }
     }
-    var suggestions by remember { mutableStateOf(emptyList<String>() to -1) }
-    val typing = remember {
-        TerminalTyping({ viewModel.words.engine.value }, object : TerminalTyping.Output {
+    val keysSettings by viewModel.keysSettings.collectAsStateWithLifecycle()
+    var keysSettingsOpen by remember { mutableStateOf(false) }
+    var direct by remember { mutableStateOf(false) }
+    // Set below, once the keys exist; the globe key on the keys asks for it.
+    var usePhoneKeyboard by remember { mutableStateOf({}) }
+    // Bori Keyboard, typing into the type bar (or, for Ctrl/Alt keys and in direct mode, the terminal).
+    val hostContext = LocalContext.current
+    val keys = remember {
+        BoriKeysController(hostContext, object : BoriKeysController.Terminal {
+            override fun sendLine(line: String) =
+                viewModel.sendLine(viewModel.tabs.value.firstOrNull { it.id == viewModel.layout.value.focusedTabId }?.session, line)
+            override fun key(code: Int) = sendKeyCode(code, false)
             override fun text(s: String) {
                 val view = views[focusedSlot.value] ?: return
                 s.codePoints().forEach { view.inputCodePoint(it, false, false) }
             }
-            // A correction's Backspaces must not use up a pending Ctrl or Alt.
-            override fun backspace(n: Int) {
-                val view = views[focusedSlot.value]?.takeIf { it.currentSession != null } ?: return
-                repeat(n) { view.handleKeyCode(KeyEvent.KEYCODE_DEL, 0) }
+            override fun modifierPending(): Boolean = viewModel.ctrl.value || viewModel.alt.value
+            override fun atShellPrompt(): Boolean =
+                ShellPrompt.REGEX.containsMatchIn(lineBeforeCursor(views[focusedSlot.value]?.currentSession))
+            override fun openSettings() { keysSettingsOpen = true }
+            override fun usePhoneKeyboard() = usePhoneKeyboard.invoke()
+        })
+    }
+    DisposableEffect(keys) { onDispose { keys.dispose() } }
+    LaunchedEffect(keysSettings) { keys.apply(keysSettings) }
+    LaunchedEffect(direct) { keys.direct = direct }
+
+    // Switching keyboards: the phone's comes up at once (into the type bar), and goes away for
+    // Bori's keys. Done here, on the tap, so the saved choice loading or the terminal coming into
+    // view never pops or closes a keyboard.
+    val switchKeyboard: (Boolean) -> Unit = { system ->
+        viewModel.setSystemKeyboard(system)
+        if (system) {
+            keys.focusBar(phoneKeyboard = true)
+        } else {
+            keys.focusBar(phoneKeyboard = false)
+            openKeys()
+        }
+    }
+    usePhoneKeyboard = { switchKeyboard(true) }
+    // A tap on the terminal: the cursor goes to the type bar, with the keyboard in use. A physical
+    // keyboard keeps typing into the terminal itself.
+    val tapTerminal: () -> Unit = {
+        when {
+            systemKeyboard -> keys.focusBar(phoneKeyboard = true)
+            hasHardKeyboard.value -> Unit
+            else -> {
+                openKeys()
+                keys.focusBar(phoneKeyboard = false)
             }
-            override fun lineBeforeCursor(): String = lineBeforeCursor(views[focusedSlot.value]?.currentSession)
-            override fun screenWords(): Set<String> = screenWords(views[focusedSlot.value]?.currentSession)
-        }).also { t -> t.onChange = { suggestions = t.suggestions to t.boldIndex } }
+        }
     }
-    LaunchedEffect(keysSettings.autocorrect) {
-        typing.level = runCatching { Aggressiveness.valueOf(keysSettings.autocorrect) }.getOrDefault(Aggressiveness.NORMAL)
-    }
-    // The dictionary loads the first time the keys open (about a second, off the main thread).
-    LaunchedEffect(keysShown, keysSettings.language) {
-        if (keysShown) viewModel.words.load(Language.fromTag(keysSettings.language))
-    }
-    // Another pane, another line: the word being typed there is done.
-    LaunchedEffect(layout.focused) { typing.breakWord() }
 
     Scaffold(
         containerColor = colors.terminalBackground,
@@ -389,8 +390,7 @@ fun TerminalScreen(
                         onFontChange = { sp -> fonts = fonts.toMutableList().also { it[slot] = sp } },
                         viewModel = viewModel,
                         isFocused = { focusedSlot.value == slot },
-                        systemKeyboard = systemKeyboard,
-                        onShowKeys = openKeys,
+                        onTap = tapTerminal,
                         onView = { view -> views[slot] = view },
                         // A replaced view may go after its successor registered; leave that one.
                         onViewGone = { view -> if (views[slot] === view) views.remove(slot) },
@@ -421,12 +421,13 @@ fun TerminalScreen(
                 systemKeyboard = systemKeyboard,
                 ctrl = ctrl,
                 alt = alt,
+                direct = direct,
                 colors = colors,
                 settings = keysSettings,
                 onSettings = viewModel::setKeysSettings,
-                typing = typing,
-                suggestions = suggestions.first,
-                boldIndex = suggestions.second,
+                keys = keys,
+                settingsOpen = keysSettingsOpen,
+                onSettingsOpen = { keysSettingsOpen = it },
                 autoEnter = focusedTab?.takeIf { it.kind is ShellKind.Linux && !it.finished }?.let { it.id in autoEnter },
                 onToggleAutoEnter = { focusedTab?.let { toggleAutoEnter(it.id) } },
                 autoEnterTotals = {
@@ -435,9 +436,8 @@ fun TerminalScreen(
                 },
                 onToggleCtrl = viewModel::toggleCtrl,
                 onToggleAlt = viewModel::toggleAlt,
+                onToggleDirect = { direct = !direct },
                 onKeyCode = sendKeyCode,
-                focusLineBox = focusLineBox,
-                onSendLine = { line -> viewModel.sendLine(tabs.firstOrNull { it.id == layout.focusedTabId }?.session, line) },
                 onShowKeys = viewModel::showKeys,
                 onSystemKeyboard = switchKeyboard,
             )
@@ -547,8 +547,7 @@ private fun TerminalPane(
     onFontChange: (Float) -> Unit,
     viewModel: TerminalViewModel,
     isFocused: () -> Boolean,
-    systemKeyboard: Boolean,
-    onShowKeys: () -> Unit,
+    onTap: () -> Unit,
     onView: (TerminalView) -> Unit,
     onViewGone: (TerminalView) -> Unit,
     launcher: @Composable () -> Unit,
@@ -588,10 +587,8 @@ private fun TerminalPane(
                             ScreenViewClient(
                                 view = v,
                                 viewModel = viewModel,
-                                onTap = { viewModel.focus(slot) },
+                                onTap = { viewModel.focus(slot); onTap() },
                                 isFocused = isFocused,
-                                systemKeyboard = systemKeyboard,
-                                onShowKeys = onShowKeys,
                                 onScale = { scale ->
                                     val now = currentFont.value
                                     val next = (now * scale).coerceIn(MIN_FONT_SP, MAX_FONT_SP)
@@ -599,7 +596,8 @@ private fun TerminalPane(
                                 },
                             ),
                         )
-                        v.setSoftKeyboardEnabled(systemKeyboard)
+                        // Text goes through the type bar; the terminal never takes the phone's keyboard.
+                        v.setSoftKeyboardEnabled(false)
                         v.setTextSize(with(density) { fontSp.sp.toPx() }.toInt())
                         v.keepScreenOn = focused && visible
                         if (v.currentSession !== tab.session) v.attachSession(tab.session)
@@ -777,14 +775,6 @@ private fun FullScreenEffect(fullScreen: Boolean) {
 }
 
 /** Words on [session]'s screen and the last lines above it: file names, commands, errors. */
-private fun screenWords(session: TerminalSession?): Set<String> {
-    val emulator = session?.emulator ?: return emptySet()
-    val screen = emulator.screen
-    val top = -minOf(screen.activeTranscriptRows, 60)
-    val text = screen.getSelectedText(0, top, emulator.mColumns, emulator.mRows - 1)
-    return SCREEN_WORD.findAll(text).map { it.value.trimEnd('.', '-') }.filter { it.length >= 3 }.toSet()
-}
-
 /** The cursor's line up to the cursor: a shell prompt, or an agent's input box. */
 private fun lineBeforeCursor(session: TerminalSession?): String {
     val emulator = session?.emulator ?: return ""
@@ -793,8 +783,6 @@ private fun lineBeforeCursor(session: TerminalSession?): String {
     val end = row.findStartOfColumn(emulator.cursorCol.coerceIn(0, emulator.mColumns))
     return String(row.mText, 0, end)
 }
-
-private val SCREEN_WORD = Regex("[A-Za-z0-9_][A-Za-z0-9_.\\-]+")
 
 private fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
@@ -808,23 +796,13 @@ private class ScreenViewClient(
     private val viewModel: TerminalViewModel,
     private val onTap: () -> Unit,
     private val isFocused: () -> Boolean,
-    private val systemKeyboard: Boolean,
-    private val onShowKeys: () -> Unit,
     private val onScale: (Float) -> Float,
 ) : TerminalViewClient {
     override fun onScale(scale: Float): Float = onScale.invoke(scale)
 
     override fun onSingleTapUp(e: MotionEvent?) {
-        onTap()
         view.requestFocus()
-        val imm = view.context.getSystemService(InputMethodManager::class.java)
-        if (systemKeyboard) {
-            imm?.showSoftInput(view, 0)
-        } else {
-            // A chat field may have left the phone's keyboard up.
-            imm?.hideSoftInputFromWindow(view.windowToken, 0)
-            onShowKeys()
-        }
+        onTap()
     }
 
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false

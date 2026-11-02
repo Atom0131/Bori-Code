@@ -165,7 +165,8 @@ class GlideDecoder(private val dict: BinaryDictionary) {
                         key = k
                     }
                 }
-                if (depth >= 1 && key >= 0 && dict.isWord(child) && !dict.isOffensive(child) &&
+                // Rare words (no corpus frequency) are typed, never swiped.
+                if (depth >= 1 && key >= 0 && dict.isWord(child) && !dict.isOffensive(child) && !dict.isRare(child) &&
                     hypot(kx[key] - ex, ky[key] - ey) <= RADIUS_ENDS
                 ) {
                     out.add(child)

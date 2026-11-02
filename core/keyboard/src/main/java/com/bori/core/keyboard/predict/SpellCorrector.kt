@@ -147,7 +147,10 @@ class SpellCorrector(private val dict: BinaryDictionary) {
         if (x.isNaN()) return 1f + extra
         val d = p.distance(x, y, bc)
         if (d.isNaN()) return 1f + extra
-        return (0.35f + 0.4f * d).coerceIn(0.45f, 1.1f) + extra
+        var near = (0.35f + 0.4f * d).coerceIn(0.45f, 1.1f)
+        // The last tap of a long word is often rushed (backgrounda -> backgrounds).
+        if (i == m - 1 && m >= 5 && d <= 1.2f) near -= SUB_LAST_DISCOUNT
+        return near + extra
     }
 
     private fun insCost(c: Char, pchar: Char): Float = when {
@@ -204,6 +207,8 @@ class SpellCorrector(private val dict: BinaryDictionary) {
     companion object {
         const val SUB_ACCENT = 0.15f
         const val SUB_FIRST_EXTRA = 0.15f
+        /** Neighbour key on the last letter of a 5+ letter word (tools/typo_bench.py sets B, F, M). */
+        const val SUB_LAST_DISCOUNT = 0.15f
         const val INS_APOSTROPHE = 0.1f
         const val INS_OTHER = 1.0f
         const val INS_DOUBLE = 0.5f
@@ -214,10 +219,13 @@ class SpellCorrector(private val dict: BinaryDictionary) {
         const val TRANSPOSE = 0.65f
         const val MAX_DEPTH = 48
 
+        /** Search limit by typed length. Long words have few look-alikes, so they may take more slips. */
         fun maxCost(n: Int): Float = when {
             n <= 2 -> 1.0f
             n <= 4 -> 1.3f
-            else -> 2.0f
+            n <= 7 -> 2.0f
+            n <= 10 -> 2.5f
+            else -> 3.0f
         }
     }
 }

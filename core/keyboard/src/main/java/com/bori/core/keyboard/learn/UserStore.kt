@@ -82,8 +82,6 @@ class UserStore private constructor(context: Context) {
         return out
     }
 
-    fun isLearned(word: String): Boolean = isPersonal(word) || countOf(word) >= LEARN_AFTER
-
     /** Words the user has typed after [prev], most frequent first. */
     fun nextWords(prev: String, limit: Int): List<Pair<String, Int>> {
         val prefix = prev.lowercase() + SEP

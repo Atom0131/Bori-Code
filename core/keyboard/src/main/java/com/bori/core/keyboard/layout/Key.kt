@@ -12,6 +12,7 @@ sealed interface KeyCode {
     data object Enter : KeyCode
     data object Space : KeyCode
     data object Globe : KeyCode
+    data object Emoji : KeyCode
 }
 
 data class Key(

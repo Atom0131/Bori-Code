@@ -1,15 +1,15 @@
 package com.bori.app.ui.terminal
 
+import android.graphics.drawable.GradientDrawable
+import android.util.TypedValue
 import android.view.KeyEvent
-import androidx.compose.foundation.Canvas
+import android.view.ViewGroup
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -18,14 +18,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -48,64 +44,29 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.key.Key as KeyName
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.bori.app.data.prefs.TerminalKeysSettings
-import com.bori.app.terminal.TerminalTyping
 import com.bori.app.ui.theme.BoriColors
-import com.bori.core.keyboard.layout.Key
-import com.bori.core.keyboard.layout.KeyCode
-import com.bori.core.keyboard.layout.KeyGeometry
-import com.bori.core.keyboard.layout.KeyKind
-import com.bori.core.keyboard.layout.KeyboardLayout
-import com.bori.core.keyboard.layout.LayoutId
-import com.bori.core.keyboard.layout.PlacedKey
-import com.bori.core.keyboard.predict.KeyProximity
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -113,54 +74,6 @@ import kotlinx.coroutines.launch
 
 private const val REPEAT_DELAY_MS = 400L
 private const val REPEAT_EVERY_MS = 50L
-private const val CAPS_LOCK_TAP_MS = 350L
-
-/** From this width the keys split in two, as on an unfolded foldable (Bori Keyboard's BigScreen.MIN_DP). */
-private const val SPLIT_FROM_DP = 600
-
-private fun text(c: String, kind: KeyKind = KeyKind.LETTER, width: Float = 1f) = Key(c, KeyCode.Text(c), width, kind)
-private fun row(keys: String, kind: KeyKind = KeyKind.LETTER) = keys.split(' ').map { text(it, kind) }
-
-private val NUMBERS = row("1 2 3 4 5 6 7 8 9 0", KeyKind.FUNCTION)
-
-/** A normal phone keyboard: Shift and Backspace beside z…m, and ?123 ⌨ , space . Enter at the bottom (⌨ is the phone's keyboard). */
-private fun letters(numberRow: Boolean) = KeyboardLayout(
-    LayoutId.ALPHA,
-    listOfNotNull(
-        NUMBERS.takeIf { numberRow },
-        row("q w e r t y u i o p"),
-        row("a s d f g h j k l"),
-        listOf(Key("⇧", KeyCode.Shift, 1.5f, KeyKind.FUNCTION)) + row("z x c v b n m") +
-            Key("⌫", KeyCode.Delete, 1.5f, KeyKind.FUNCTION),
-        listOf(
-            Key("?123", KeyCode.Switch(LayoutId.SYMBOLS), 1.5f, KeyKind.FUNCTION),
-            Key("⌨", KeyCode.Globe, 1f, KeyKind.FUNCTION),
-            text(",", KeyKind.FUNCTION),
-            Key("", KeyCode.Space, 4f, KeyKind.SPACE),
-            text(".", KeyKind.FUNCTION),
-            Key("↵", KeyCode.Enter, 1.5f, KeyKind.ENTER),
-        ),
-    ),
-)
-
-/** Digits always on top, then every symbol a shell uses. */
-private val SYMBOLS = KeyboardLayout(
-    LayoutId.SYMBOLS,
-    listOf(
-        NUMBERS,
-        row("! @ # $ % ^ & * ( )", KeyKind.FUNCTION),
-        row("` ~ - _ = + [ ] { }", KeyKind.FUNCTION),
-        row("\\ | ; : ' \" < >", KeyKind.FUNCTION) + Key("⌫", KeyCode.Delete, 2f, KeyKind.FUNCTION),
-        listOf(
-            Key("abc", KeyCode.Switch(LayoutId.ALPHA), 1.5f, KeyKind.FUNCTION),
-            Key("⌨", KeyCode.Globe, 1f, KeyKind.FUNCTION),
-            text("/", KeyKind.FUNCTION),
-            Key("", KeyCode.Space, 4f, KeyKind.SPACE),
-            text("?", KeyKind.FUNCTION),
-            Key("↵", KeyCode.Enter, 1.5f, KeyKind.ENTER),
-        ),
-    ),
-)
 
 /** A key on the top bar: a terminal key code, or text. */
 private class BarKey(val label: String, val description: String, val code: Int? = null, val text: String? = null, val repeats: Boolean = false)
@@ -182,16 +95,13 @@ private val BAR = listOf(
     barCode("PgDn", KeyEvent.KEYCODE_PAGE_DOWN, "Page down", repeats = true),
 ) + "/ - | ~ _ :".split(' ').map { BarKey(it, it, text = it) }
 
-private enum class ShiftState { OFF, ONCE, LOCK }
-
 /**
  * The terminal's keyboard. The top bar is always there: Esc, Tab, Ctrl, Alt, the arrows, Home/End,
- * PgUp/PgDn, the symbols shells use and settings, then (always in reach) the auto-enter bot and Enter. Below it, when [showKeys], a
- * normal phone keyboard with a suggestion strip, spell correction and glide typing ([typing], Bori
- * Keyboard's engine), drawn from one [KeyGeometry] so taps, swipes and correction agree on where
- * every key is. Its size, split and vibration come from [settings]. With [systemKeyboard] the
- * phone's keyboard is used instead, typing into a box whose Enter sends the line.
- * Ctrl and Alt are one-shot: they apply to the next key. Shift does the same, and a double tap locks it.
+ * PgUp/PgDn, the symbols shells use and settings, then (always in reach) the auto-enter bot, the
+ * direct switch, Enter and the keys toggle; those keys go straight to the terminal. Under it the
+ * type bar, where a command or a prompt is typed and Enter sends it. Below that, when [showKeys],
+ * Bori Keyboard itself ([keys]): its suggestion strip, keys, glide typing and panels. With
+ * [systemKeyboard] the phone's keyboard types into the same bar instead (voice typing works there).
  */
 @Composable
 fun TerminalKeyboard(
@@ -199,88 +109,128 @@ fun TerminalKeyboard(
     systemKeyboard: Boolean,
     ctrl: Boolean,
     alt: Boolean,
+    direct: Boolean,
     colors: BoriColors,
     settings: TerminalKeysSettings,
     onSettings: (TerminalKeysSettings) -> Unit,
-    typing: TerminalTyping,
-    /** [typing]'s current suggestions, and which one space will commit (-1: none). */
-    suggestions: List<String>,
-    boldIndex: Int,
+    keys: BoriKeysController,
+    settingsOpen: Boolean,
+    onSettingsOpen: (Boolean) -> Unit,
     /** Auto-enter for the focused tab: on/off, or null when it can't run there. */
     autoEnter: Boolean?,
     onToggleAutoEnter: () -> Unit,
     autoEnterTotals: () -> String,
-    focusLineBox: Int,
     onToggleCtrl: () -> Unit,
     onToggleAlt: () -> Unit,
+    onToggleDirect: () -> Unit,
     onKeyCode: (code: Int, shift: Boolean) -> Unit,
-    onSendLine: (String) -> Unit,
     onShowKeys: (Boolean) -> Unit,
     onSystemKeyboard: (Boolean) -> Unit,
 ) {
-    val context = LocalContext.current
-    val haptics = remember { KeyHaptics(context) }
     // While a slider is being dragged, its value shows at once; it's saved when the drag ends.
     var live by remember { mutableStateOf<TerminalKeysSettings?>(null) }
     val s = live ?: settings
-    val buzz = rememberUpdatedState { haptics.tap(s.vibration) }
-    var settingsOpen by remember { mutableStateOf(false) }
-    val modifiers = rememberUpdatedState(ctrl || alt)
-
-    // A terminal key from the bar: the word being typed ends as it is.
-    val sendCode: (Int) -> Unit = { code ->
-        typing.breakWord(enter = code == KeyEvent.KEYCODE_ENTER)
-        onKeyCode(code, false)
-    }
+    val vibration = rememberUpdatedState(s.vibration)
+    val buzz = { keys.previewVibration(vibration.value) }
+    val bori = showKeys && !systemKeyboard
 
     Column(modifier = Modifier.fillMaxWidth().background(colors.terminalKeys)) {
-        if (showKeys && !systemKeyboard) {
-            SuggestionStrip(suggestions, boldIndex, colors) { i -> buzz.value(); typing.pick(i) }
-        }
         TopBar(
             ctrl = ctrl,
             alt = alt,
+            direct = direct,
             colors = colors,
             showKeys = showKeys,
             systemKeyboard = systemKeyboard,
             autoEnter = autoEnter,
-            buzz = { buzz.value() },
-            onCode = sendCode,
-            onText = { t -> typing.raw(t) },
+            buzz = buzz,
+            onCode = { code -> if (code == KeyEvent.KEYCODE_ENTER) keys.enter() else onKeyCode(code, false) },
+            onText = keys::typeSymbol,
             onToggleCtrl = onToggleCtrl,
             onToggleAlt = onToggleAlt,
+            onToggleDirect = onToggleDirect,
             onToggleAutoEnter = onToggleAutoEnter,
-            onSettings = { settingsOpen = true },
+            onSettings = { onSettingsOpen(true) },
             onShowKeys = onShowKeys,
             onSystemKeyboard = onSystemKeyboard,
         )
-        if (systemKeyboard) {
-            LineBox(colors, focusLineBox, onSendLine, onKeyCode)
-        } else if (showKeys) {
-            KeyPad(s, colors, typing, modifiers, buzz = { buzz.value() }, onKeyCode = onKeyCode, onPhone = { onSystemKeyboard(true) })
-        }
+        TypeBar(keys, colors, systemKeyboard)
+        if (bori) BoriKeysPanel(keys)
     }
 
     if (settingsOpen) {
         KeysSettingsSheet(
             settings = s,
-            onChange = { live = it },
+            onChange = { live = it; keys.apply(it) },
             onDone = { done -> live = null; onSettings(done) },
-            onPreviewVibration = { haptics.tap(it) },
+            onPreviewVibration = keys::previewVibration,
             autoEnterTotals = autoEnterTotals,
             onDismiss = {
                 live?.let(onSettings)
                 live = null
-                settingsOpen = false
+                onSettingsOpen(false)
             },
         )
     }
+}
+
+/**
+ * The line being typed, on Bori's keys or the phone's keyboard. Enter (or Send) sends it; Enter
+ * or Backspace in an empty bar go to the terminal.
+ */
+@Composable
+private fun TypeBar(keys: BoriKeysController, colors: BoriColors, systemKeyboard: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AndroidView(
+            modifier = Modifier.weight(1f).padding(vertical = 2.dp),
+            factory = {
+                keys.edit.apply {
+                    (parent as? ViewGroup)?.removeView(this)
+                    val density = resources.displayMetrics.density
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                    val padH = (10 * density).toInt()
+                    val padV = (9 * density).toInt()
+                    setPadding(padH, padV, padH, padV)
+                }
+            },
+            update = { e ->
+                e.setTextColor(colors.terminalText.toArgb())
+                e.setHintTextColor(colors.terminalText.copy(alpha = 0.45f).toArgb())
+                e.hint = if (systemKeyboard) "Type or speak here; Enter sends it" else "Type here; Enter sends it to the terminal"
+                e.background = GradientDrawable().apply {
+                    cornerRadius = 8 * e.resources.displayMetrics.density
+                    setColor(colors.terminalText.copy(alpha = 0.09f).toArgb())
+                }
+                e.showSoftInputOnFocus = systemKeyboard
+            },
+        )
+        IconButton(onClick = { keys.enter() }, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send to terminal", tint = colors.terminalAccent)
+        }
+    }
+}
+
+/** Bori Keyboard's own views: suggestion strip, keys, swipe trail, emoji and clipboard panels. */
+@Composable
+private fun BoriKeysPanel(keys: BoriKeysController) {
+    DisposableEffect(keys) {
+        keys.start()
+        onDispose { keys.stop() }
+    }
+    AndroidView(
+        modifier = Modifier.fillMaxWidth(),
+        factory = { keys.root.apply { (parent as? ViewGroup)?.removeView(this) } },
+    )
 }
 
 @Composable
 private fun TopBar(
     ctrl: Boolean,
     alt: Boolean,
+    direct: Boolean,
     colors: BoriColors,
     showKeys: Boolean,
     systemKeyboard: Boolean,
@@ -290,6 +240,7 @@ private fun TopBar(
     onText: (String) -> Unit,
     onToggleCtrl: () -> Unit,
     onToggleAlt: () -> Unit,
+    onToggleDirect: () -> Unit,
     onToggleAutoEnter: () -> Unit,
     onSettings: () -> Unit,
     onShowKeys: (Boolean) -> Unit,
@@ -306,6 +257,12 @@ private fun TopBar(
             BAR.first.forEach { bar(it) }
             BarButton("CTRL", null, "Control", ctrl, false, colors, buzz, onPress = onToggleCtrl)
             BarButton("ALT", null, "Alt", alt, false, colors, buzz, onPress = onToggleAlt)
+            // Lit: Bori's keys type straight into the terminal, a key at a time (menus that take
+            // one key, like 1/2/3), instead of into the type bar.
+            BarButton(
+                "DIRECT", null, if (direct) "Type into the type bar" else "Type straight into the terminal",
+                direct, false, colors, buzz, onPress = onToggleDirect,
+            )
             BAR.second.forEach { bar(it) }
             BarButton(null, Icons.Default.Settings, "Keyboard settings", false, false, colors, buzz, onPress = onSettings)
         }
@@ -323,247 +280,6 @@ private fun TopBar(
             systemKeyboard -> BarButton(null, Icons.Default.Terminal, "Use Bori's terminal keys", false, false, colors, buzz) { onSystemKeyboard(false) }
             showKeys -> BarButton(null, Icons.Default.KeyboardHide, "Hide keys", false, false, colors, buzz) { onShowKeys(false) }
             else -> BarButton(null, Icons.Default.Keyboard, "Show keys", false, false, colors, buzz) { onShowKeys(true) }
-        }
-    }
-}
-
-/** One finger on the keys: where it went down, and the swipe if it's become one. */
-private class Track(val id: Long, val key: PlacedKey?, val start: Offset) {
-    val xs = ArrayList<Float>()
-    val ys = ArrayList<Float>()
-    var swiping = false
-    var repeat: Job? = null
-    var acted = false
-}
-
-/**
- * The letter or symbol keys, drawn from a [KeyGeometry] and read from raw touches: a tap types the
- * key under the finger (no dead zones between keys), a swipe from a letter glides a word, and a
- * second finger going down types the first finger's key at once, so two thumbs can roll.
- */
-@Composable
-private fun KeyPad(
-    s: TerminalKeysSettings,
-    colors: BoriColors,
-    typing: TerminalTyping,
-    modifiers: androidx.compose.runtime.State<Boolean>,
-    buzz: () -> Unit,
-    onKeyCode: (code: Int, shift: Boolean) -> Unit,
-    onPhone: () -> Unit,
-) {
-    var shift by remember { mutableStateOf(ShiftState.OFF) }
-    var lastShiftTap by remember { mutableLongStateOf(0L) }
-    var symbols by remember { mutableStateOf(false) }
-    var pressed by remember { mutableStateOf<PlacedKey?>(null) }
-    var trail by remember { mutableStateOf<List<Offset>>(emptyList()) }
-    val density = LocalDensity.current
-    val measurer = rememberTextMeasurer()
-
-    val configuration = LocalConfiguration.current
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        // Sizes as in Bori Keyboard (KeyboardView): split only on a big screen and a wide keyboard;
-        // the halves sit off the edges, where thumbs can't reach well.
-        val bigScreen = configuration.smallestScreenWidthDp >= SPLIT_FROM_DP && maxWidth.value >= SPLIT_FROM_DP
-        val split = s.split ?: bigScreen
-        val alpha = remember(s.numberRow) { letters(s.numberRow) }
-        val layout = if (symbols) SYMBOLS else alpha
-        // 54 dp rows, but never more than a tenth of the screen's height each.
-        val rowDp = minOf(54f * s.height, (configuration.screenHeightDp * 0.1f).coerceAtLeast(36f))
-        val heightDp = rowDp * alpha.rows.size + 8f
-        val widthPx = with(density) { maxWidth.roundToPx() }
-        val heightPx = with(density) { heightDp.dp.roundToPx() }
-        val geometry = remember(layout, widthPx, heightPx, split, s.gap, s.edge) {
-            with(density) {
-                KeyGeometry(
-                    layout, widthPx, heightPx,
-                    // The edge keys' touch areas still run to the edge.
-                    padH = 2.dp.toPx() + if (split) widthPx * s.edge else 0f,
-                    padV = 4.dp.toPx(),
-                    gapH = 5.dp.toPx(),
-                    gapV = 8.dp.toPx(),
-                    splitGap = if (split) widthPx * s.gap else 0f,
-                )
-            }
-        }
-        LaunchedEffect(geometry) { if (layout.id == LayoutId.ALPHA) typing.proximity = KeyProximity(geometry) }
-
-        val act: (PlacedKey, Offset) -> Unit = act@{ pk, at ->
-            val upper = shift != ShiftState.OFF
-            when (val code = pk.key.code) {
-                is KeyCode.Text -> {
-                    val t = if (upper && pk.key.isLetter) code.text.uppercase() else code.text
-                    when {
-                        // Ctrl+C and friends aren't words.
-                        modifiers.value -> typing.raw(t)
-                        pk.key.isLetter || t == "'" -> typing.letter(t, at.x, at.y)
-                        else -> typing.separator(t)
-                    }
-                    if (shift == ShiftState.ONCE && pk.key.isLetter) shift = ShiftState.OFF
-                }
-                KeyCode.Space -> if (modifiers.value) typing.raw(" ") else typing.separator(" ")
-                KeyCode.Delete -> typing.delete()
-                KeyCode.Enter -> {
-                    typing.breakWord(enter = true)
-                    onKeyCode(KeyEvent.KEYCODE_ENTER, false)
-                }
-                KeyCode.Shift -> {
-                    val now = System.currentTimeMillis()
-                    shift = when {
-                        shift == ShiftState.ONCE && now - lastShiftTap < CAPS_LOCK_TAP_MS -> ShiftState.LOCK
-                        shift == ShiftState.OFF -> ShiftState.ONCE
-                        else -> ShiftState.OFF
-                    }
-                    lastShiftTap = now
-                }
-                is KeyCode.Switch -> symbols = code.target == LayoutId.SYMBOLS
-                KeyCode.Globe -> onPhone()
-            }
-        }
-        val actNow by rememberUpdatedState(act)
-        val keyWidth = remember(geometry) { KeyProximity(geometry).keyWidth }
-
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(heightDp.dp)
-                .pointerInput(geometry) {
-                    coroutineScope {
-                        fun begin(change: PointerInputChange): Track {
-                            val pk = geometry.keyAt(change.position.x, change.position.y)
-                            val t = Track(change.id.value, pk, change.position)
-                            t.xs += change.position.x
-                            t.ys += change.position.y
-                            pressed = pk
-                            buzz()
-                            if (pk?.key?.code == KeyCode.Delete) {
-                                // Backspace acts on touch and repeats while held.
-                                actNow(pk, change.position)
-                                t.acted = true
-                                t.repeat = launch {
-                                    delay(REPEAT_DELAY_MS)
-                                    while (isActive) {
-                                        actNow(pk, change.position)
-                                        delay(REPEAT_EVERY_MS)
-                                    }
-                                }
-                            }
-                            return t
-                        }
-                        fun end(t: Track) {
-                            t.repeat?.cancel()
-                            pressed = null
-                            if (t.swiping) {
-                                trail = emptyList()
-                                val caps = when (shift) {
-                                    ShiftState.LOCK -> TerminalTyping.Caps.ALL
-                                    ShiftState.ONCE -> TerminalTyping.Caps.FIRST
-                                    ShiftState.OFF -> TerminalTyping.Caps.NONE
-                                }
-                                typing.glide(t.xs.toFloatArray(), t.ys.toFloatArray(), t.xs.size, caps)
-                                if (shift == ShiftState.ONCE) shift = ShiftState.OFF
-                            } else if (!t.acted) {
-                                t.key?.let { actNow(it, t.start) }
-                            }
-                        }
-                        awaitEachGesture {
-                            var t: Track? = begin(awaitFirstDown(requireUnconsumed = false))
-                            while (t != null) {
-                                val event = awaitPointerEvent()
-                                val cur: Track = t
-                                // A second finger: the first one's key is typed now.
-                                val next = event.changes.firstOrNull { it.pressed && !it.previousPressed && it.id.value != cur.id }
-                                if (next != null) {
-                                    end(cur)
-                                    t = begin(next)
-                                    continue
-                                }
-                                val change = event.changes.firstOrNull { it.id.value == cur.id } ?: break
-                                if (!change.pressed) {
-                                    end(cur)
-                                    t = null
-                                    break
-                                }
-                                val canSwipe = !symbols && cur.key?.key?.isLetter == true && !modifiers.value
-                                if (canSwipe && !cur.swiping && (change.position - cur.start).getDistance() > keyWidth * 0.5f) {
-                                    cur.swiping = true
-                                    pressed = null
-                                }
-                                if (cur.swiping) {
-                                    cur.xs += change.position.x
-                                    cur.ys += change.position.y
-                                    trail = cur.xs.indices.map { Offset(cur.xs[it], cur.ys[it]) }
-                                    change.consume()
-                                }
-                            }
-                        }
-                    }
-                }
-                .clearAndSetSemantics { contentDescription = if (symbols) "Symbol keys" else "Letter keys" },
-        ) {
-            val radius = CornerRadius(6.dp.toPx())
-            val upper = shift != ShiftState.OFF
-            for (pk in geometry.keys) {
-                val r = pk.visual
-                val fill = when {
-                    pk === pressed -> colors.terminalAccent.copy(alpha = 0.35f)
-                    pk.key.code == KeyCode.Shift && upper -> colors.terminalAccent.copy(alpha = 0.25f)
-                    pk.key.kind == KeyKind.LETTER || pk.key.kind == KeyKind.SPACE -> colors.terminalText.copy(alpha = 0.10f)
-                    else -> colors.terminalText.copy(alpha = 0.17f)
-                }
-                drawRoundRect(fill, Offset(r.left, r.top), Size(r.width(), r.height()), radius)
-                val label = when {
-                    pk.key.code == KeyCode.Shift && shift == ShiftState.LOCK -> "⇪"
-                    pk.key.code == KeyCode.Space -> s.language.uppercase()
-                    upper && pk.key.isLetter -> pk.key.label.uppercase()
-                    else -> pk.key.label
-                }
-                if (label.isEmpty()) continue
-                val big = label.length == 1 && pk.key.code !is KeyCode.Switch && pk.key.code != KeyCode.Globe
-                val style = TextStyle(
-                    color = if (pk.key.code == KeyCode.Space) colors.terminalText.copy(alpha = 0.45f) else colors.terminalText,
-                    fontSize = if (big) 21.sp else 14.sp,
-                    fontWeight = if (pk.key.code == KeyCode.Shift && upper) FontWeight.Bold else FontWeight.Normal,
-                )
-                val m = measurer.measure(label, style)
-                drawText(m, topLeft = Offset(r.centerX() - m.size.width / 2f, r.centerY() - m.size.height / 2f))
-            }
-            if (trail.size > 1) {
-                val path = Path().apply {
-                    moveTo(trail[0].x, trail[0].y)
-                    for (i in 1 until trail.size) lineTo(trail[i].x, trail[i].y)
-                }
-                drawPath(path, colors.terminalAccent.copy(alpha = 0.6f), style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-            }
-        }
-    }
-}
-
-/** Up to three suggestions; tapping one finishes the word. Kept at a fixed height so the keys don't jump. */
-@Composable
-private fun SuggestionStrip(suggestions: List<String>, bold: Int, colors: BoriColors, onPick: (Int) -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
-        repeat(3) { i ->
-            val s = suggestions.getOrNull(i)
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .then(if (s != null) Modifier.clickable { onPick(i) } else Modifier),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (s != null) {
-                    Text(
-                        s,
-                        color = colors.terminalText,
-                        fontWeight = if (i == bold) FontWeight.Bold else FontWeight.Normal,
-                        fontSize = 16.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 6.dp),
-                    )
-                }
-            }
-            if (i < 2) Box(Modifier.width(1.dp).height(20.dp).background(colors.terminalText.copy(alpha = 0.2f)))
         }
     }
 }
@@ -675,76 +391,6 @@ private fun SettingLabel(title: String, value: String?) {
     Row(modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
         Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
         if (value != null) Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-/**
- * A line of text typed on the phone's keyboard, with its own prediction and swipe (the terminal
- * itself turns them off). Enter sends it; Enter or Backspace in an empty box go to the terminal.
- */
-@Composable
-private fun LineBox(
-    colors: BoriColors,
-    focusRequest: Int,
-    onSendLine: (String) -> Unit,
-    onKeyCode: (code: Int, shift: Boolean) -> Unit,
-) {
-    var text by remember { mutableStateOf("") }
-    val focus = remember { FocusRequester() }
-    val keyboard = LocalSoftwareKeyboardController.current
-    LaunchedEffect(focusRequest) {
-        if (focusRequest > 0) {
-            focus.requestFocus()
-            keyboard?.show()
-        }
-    }
-    val send = {
-        onSendLine(text)
-        text = ""
-    }
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 2.dp, bottom = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BasicTextField(
-            value = text,
-            onValueChange = { text = it },
-            singleLine = true,
-            textStyle = TextStyle(color = colors.terminalText, fontSize = 15.sp),
-            cursorBrush = SolidColor(colors.terminalAccent),
-            keyboardOptions = KeyboardOptions(
-                // Commands: no capital first letter, no "corrected" flags. Suggestions and swipe still work.
-                capitalization = KeyboardCapitalization.None,
-                autoCorrectEnabled = false,
-                imeAction = ImeAction.Send,
-            ),
-            keyboardActions = KeyboardActions(onSend = { send() }),
-            modifier = Modifier
-                .weight(1f)
-                .focusRequester(focus)
-                .onPreviewKeyEvent { e ->
-                    if (e.type != KeyEventType.KeyDown || text.isNotEmpty()) return@onPreviewKeyEvent false
-                    when (e.key) {
-                        KeyName.Backspace -> { onKeyCode(KeyEvent.KEYCODE_DEL, false); true }
-                        KeyName.Enter -> { send(); true }
-                        else -> false
-                    }
-                }
-                .padding(vertical = 2.dp)
-                .background(colors.terminalText.copy(alpha = 0.09f), RoundedCornerShape(8.dp))
-                .padding(horizontal = 10.dp, vertical = 9.dp),
-            decorationBox = { inner ->
-                Box {
-                    if (text.isEmpty()) {
-                        Text("Type here; Enter sends it to the terminal", color = colors.terminalText.copy(alpha = 0.45f), fontSize = 15.sp, maxLines = 1)
-                    }
-                    inner()
-                }
-            },
-        )
-        IconButton(onClick = { send() }, modifier = Modifier.size(40.dp)) {
-            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send to terminal", tint = colors.terminalAccent)
-        }
     }
 }
 
