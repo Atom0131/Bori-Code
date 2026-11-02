@@ -32,16 +32,12 @@ class MainActivity : ComponentActivity() {
     lateinit var liveDiagnosticsController: LiveDiagnosticsController
 
     @Inject
-    lateinit var debugTool: com.bori.core.build.CompilerDebugTool
-
-    @Inject
     lateinit var prefsRepository: com.bori.app.data.prefs.UserPreferencesRepository
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         liveDiagnosticsController.start()
-        debugTool.debugResourceLookup()
         setContent {
             val prefs by prefsRepository.preferences.collectAsState(initial = null)
             val dark = when (prefs?.themeMode) {
