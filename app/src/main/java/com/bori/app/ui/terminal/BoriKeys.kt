@@ -96,6 +96,9 @@ class BoriKeysController(
     /** Keys go straight to the terminal, letter by letter. */
     var direct = false
 
+    /** The type bar was tapped: the keyboard in use should come up. */
+    var onBarTapped: (() -> Unit)? = null
+
     private var info = EditorInfo()
     private var ic: InputConnection? = null
     private var policy = EditorPolicy.DEFAULT
@@ -126,6 +129,10 @@ class BoriKeysController(
                     KeyEvent.KEYCODE_ENTER -> { submit(); true }
                     else -> false
                 }
+            }
+            setOnTouchListener { _, e ->
+                if (e.action == android.view.MotionEvent.ACTION_UP) onBarTapped?.invoke()
+                false
             }
             onSelection = { s, e, cs, ce -> if (started) session.onUpdateSelection(s, e, cs, ce); updateAutoShift() }
         }

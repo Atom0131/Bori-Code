@@ -223,6 +223,11 @@ fun TerminalScreen(
         }
     }
     usePhoneKeyboard = { switchKeyboard(true) }
+    // A tap on the type bar brings up the keyboard in use, even with a physical keyboard attached.
+    val usingSystemKeyboard = rememberUpdatedState(systemKeyboard)
+    keys.onBarTapped = {
+        if (usingSystemKeyboard.value) keys.focusBar(phoneKeyboard = true) else viewModel.showKeys(true)
+    }
     // A tap on the terminal: the cursor goes to the type bar, with the keyboard in use. A physical
     // keyboard keeps typing into the terminal itself.
     val tapTerminal: () -> Unit = {
