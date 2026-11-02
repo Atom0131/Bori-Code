@@ -9,7 +9,7 @@ toolchain (Kotlin compiler, Eclipse ECJ Java compiler, AAPT2, D8/R8, APK signer)
 runs locally, and an AI agent can scaffold and modify your project for you.
 
 - **applicationId:** `com.bori.code` (Play), `com.bori.code.full` (GitHub, with the Linux environment)
-- **Version:** 4.2.0 (versionCode 8)
+- **Version:** 4.3.0 (versionCode 9)
 - **Supports:** Android 8.0 – 15 (minSdk 26, targetSdk 35)
 - **Stack:** Kotlin · Jetpack Compose · Hilt · Room · DataStore · OkHttp
 - **License:** [GPL-3.0-or-later](LICENSE) (Apache-2.0 before 2026-10-27). Third-party notices are in [`NOTICE`](NOTICE).
