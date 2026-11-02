@@ -7,6 +7,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.ServiceCompat
+import com.bori.app.terminal.ProcessReaper
 
 /**
  * Keeps Bori Code in the foreground while terminal sessions exist, so Android doesn't kill the
@@ -42,6 +43,8 @@ class TerminalService : Service() {
         }
         ServiceCompat.startForeground(this, StatusNotifier.NOTIFICATION_ID, StatusNotifier.build(this), type)
         StatusNotifier.hold(TAG)
+        // Programs left on a dead PTY by an earlier run (see ProcessReaper).
+        ProcessReaper.sweepOrphans()
         return START_NOT_STICKY
     }
 

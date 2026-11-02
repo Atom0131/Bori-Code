@@ -311,6 +311,7 @@ class TerminalSessionManager @Inject constructor(
     fun close(id: Int) {
         val tab = _tabs.value.firstOrNull { it.id == id } ?: return
         setAutoEnter(id, false)
+        ProcessReaper.killTree(tab.session.pid)
         tab.session.finishIfRunning()
         val remaining = _tabs.value.filterNot { it.id == id }
         _tabs.value = remaining
@@ -329,7 +330,11 @@ class TerminalSessionManager @Inject constructor(
     }
 
     fun closeAll() {
-        _tabs.value.forEach { setAutoEnter(it.id, false); it.session.finishIfRunning() }
+        _tabs.value.forEach {
+            setAutoEnter(it.id, false)
+            ProcessReaper.killTree(it.session.pid)
+            it.session.finishIfRunning()
+        }
         _tabs.value = emptyList()
         _layout.update { it.copy(slots = List(it.split.panes) { null }, focused = 0) }
         agentStates.clear()
@@ -383,6 +388,8 @@ class TerminalSessionManager @Inject constructor(
             val tail = finishedSession.emulator?.screen?.transcriptText?.takeLast(2_000).orEmpty()
             val killed = PhantomProcesses.wasKilled(finishedSession.exitStatus, tail)
             updateTab(finishedSession) { it.copy(finished = true, killed = killed) }
+            // A proot that was killed can leave its programs running on a dead PTY.
+            ProcessReaper.sweepOrphans()
             screenListeners.forEach { it(finishedSession) }
             publish()
         }
