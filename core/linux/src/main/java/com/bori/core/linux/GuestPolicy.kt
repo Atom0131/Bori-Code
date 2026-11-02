@@ -34,6 +34,7 @@ class GuestPolicy @Inject constructor(
         runCatching { writeClaudePolicy(rootfs) }.onFailure { Log.w(TAG, "Claude policy", it) }
         runCatching { mergeAntigravitySettings(rootfs) }.onFailure { Log.w(TAG, "Antigravity settings", it) }
         runCatching { writeBrowserShim(rootfs) }.onFailure { Log.w(TAG, "xdg-open shim", it) }
+        runCatching { writeStatusScript(rootfs) }.onFailure { Log.w(TAG, "Status script", it) }
         runCatching { writeProjectRules(rootfs) }.onFailure { Log.w(TAG, "Project rules", it) }
         runCatching { writeShellPrompt(rootfs) }.onFailure { Log.w(TAG, "Shell prompt", it) }
         runCatching { trustWorkspaceRepos(rootfs) }.onFailure { Log.w(TAG, "Git safe.directory", it) }
@@ -122,11 +123,22 @@ class GuestPolicy @Inject constructor(
             put("Read(//root/.gemini/**)")
             put("Edit(//root/.gemini/**)")
         }
+        // Each runs the status script, which tells Bori Code what Claude is doing in this tab
+        // (its status notification). PostToolUse: an approved tool has run, so it's working again.
+        fun hook(state: String) = JSONArray().put(JSONObject().put("hooks", JSONArray().put(
+            JSONObject().put("type", "command").put("command", "$STATUS_SCRIPT $state").put("timeout", 5),
+        )))
         val policy = JSONObject().apply {
             put("permissions", JSONObject().apply {
                 put("deny", deny)
                 put("additionalDirectories", JSONArray())
                 put("disableBypassPermissionsMode", "disable")
+            })
+            put("hooks", JSONObject().apply {
+                put("UserPromptSubmit", hook("working"))
+                put("PostToolUse", hook("working"))
+                put("Notification", hook("notify"))
+                put("Stop", hook("done"))
             })
         }
         val file = File(rootfs, "etc/claude-code/managed-settings.json")
@@ -224,11 +236,34 @@ class GuestPolicy @Inject constructor(
         shim.setExecutable(true, false)
     }
 
+    /**
+     * `bori-status <state>` (run by Claude Code's hooks) writes the state and the hook's JSON to
+     * `agent-<tab>.state` in the handoff folder, where Bori Code picks it up. BORI_TAB is set by
+     * Bori Code's terminal; outside it (a background job) there's no tab and nothing to tell.
+     */
+    private fun writeStatusScript(rootfs: File) {
+        val script = File(rootfs, STATUS_SCRIPT.removePrefix("/"))
+        script.parentFile?.mkdirs()
+        script.writeText(
+            """
+            |#!/bin/sh
+            |# Written by Bori Code: tells the app what the coding agent in this terminal tab is doing.
+            |[ -n "${'$'}BORI_TAB" ] || { cat >/dev/null; exit 0; }
+            |f=${ProotLauncher.GUEST_HANDOFF}/agent-${'$'}BORI_TAB
+            |{ echo "${'$'}1"; head -c 4000; } > "${'$'}f.tmp" 2>/dev/null && mv "${'$'}f.tmp" "${'$'}f.state"
+            |exit 0
+            |""".trimMargin(),
+        )
+        script.setExecutable(true, false)
+    }
+
     /** org.json escapes every "/" as "\\/" (valid, but unreadable for files people open by hand). */
     private fun JSONObject.toPrettyJson(): String = toString(2).replace("\\/", "/") + "\n"
 
     private companion object {
         const val TAG = "GuestPolicy"
+
+        const val STATUS_SCRIPT = "/usr/local/bin/bori-status"
 
         /** Where the workspace was mounted before it became [ProotLauncher.GUEST_WORKSPACE]. */
         const val LEGACY_PROJECTS = "/root/projects"

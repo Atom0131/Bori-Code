@@ -17,18 +17,22 @@ enum class CodingCli(
     /** The command a terminal tab runs to start it (and sign in on first run). */
     val command: String,
     val summary: String,
+    /** Where the install puts it in the guest; its presence is a quick installed check. */
+    val guestBinary: String,
 ) {
     CLAUDE_CODE(
         id = "claude",
         title = "Claude Code",
         command = "claude",
         summary = "Anthropic's coding agent. Sign in with your Claude account or an API key.",
+        guestBinary = "/usr/bin/claude",
     ),
     ANTIGRAVITY(
         id = "antigravity",
         title = "Antigravity CLI",
         command = "antigravity",
         summary = "Google's coding agent. Sign in with your Google account.",
+        guestBinary = "/usr/local/bin/antigravity",
     ),
     ;
 
