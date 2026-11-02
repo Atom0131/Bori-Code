@@ -133,7 +133,8 @@ and ECJ 3.32 (Java up to 17, patched for Android 8+ by the `patchEcj` task).
 - `docs/BUILD-PIPELINE.md` — the on-device compile pipeline in depth (+ Kotlin/ECJ fixes).
 - `docs/AI-SUBSYSTEM.md` — providers, routing, models, tools, per-model facts.
 - `docs/FEATURES.md` — user-facing feature map (screen + ViewModel per area).
-- `docs/CHANGE-NOTES-2026-06.md` — recent feature changelog.
+- `docs/CHANGE-NOTES-2026-11.md` — recent changelog (terminal keyboard, type bar, process reaper, GPL).
+- `docs/CHANGE-NOTES-2026-06.md` — June 2026 changelog.
 
 Legacy: `KOTLIN_PIPELINE_FIXES.txt` (folded into BUILD-PIPELINE.md).
 

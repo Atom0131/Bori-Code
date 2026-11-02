@@ -54,8 +54,10 @@ panel, and layout preview.
 A real Linux (Void or Alpine, your choice) runs inside the app through proot, with
 Termux's terminal and multi-pane tabs. Bori Code can install **Claude Code** and
 **Antigravity CLI** in it. You sign in to them yourself, inside the CLI; Bori Code
-never reads or stores their logins. The terminal has its own compact keyboard
-(suggestions, swipe typing, F1–F12, arrows by Enter, a split layout when unfolded).
+never reads or stores their logins. The terminal's keyboard is Bori Keyboard itself
+(suggestions, correction, glide typing, emoji, a split layout when unfolded). It types into a
+type bar, and Enter sends the line. The 🌐 key switches to the phone's keyboard for voice typing,
+and the top keys (Esc, Tab, Ctrl, Alt, arrows) go straight to the terminal.
 
 Google Play doesn't allow apps to download and run code like this, so the Play
 build leaves it out. The full build is published on GitHub Releases.
@@ -114,7 +116,8 @@ and AI providers emit `Flow<ChatChunk>`. Details in
 | [docs/BUILD-PIPELINE.md](docs/BUILD-PIPELINE.md) | On-device compile pipeline |
 | [docs/AI-SUBSYSTEM.md](docs/AI-SUBSYSTEM.md) | Providers, routing, models, tools |
 | [docs/FEATURES.md](docs/FEATURES.md) | User-facing feature map |
-| [docs/CHANGE-NOTES-2026-06.md](docs/CHANGE-NOTES-2026-06.md) | Recent changelog |
+| [docs/CHANGE-NOTES-2026-11.md](docs/CHANGE-NOTES-2026-11.md) | Recent changelog (terminal keyboard, type bar, GPL) |
+| [docs/CHANGE-NOTES-2026-06.md](docs/CHANGE-NOTES-2026-06.md) | June 2026 changelog |
 
 ## License
 Bori - Code is licensed under the [GNU General Public License, version 3 or later](LICENSE)
