@@ -3,6 +3,7 @@ package com.bori.app.flavor
 import android.app.Application
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavGraphBuilder
+import com.bori.app.terminal.CliLauncher
 import com.bori.app.terminal.LinuxShells
 import com.bori.app.terminal.ShellCommand
 import dagger.Binds
@@ -21,7 +22,10 @@ const val HAS_LINUX = false
 
 class NoLinuxShells @Inject constructor() : LinuxShells {
     override fun installedDistros(): List<String> = emptyList()
-    override fun shellCommand(distroId: String, hostCwd: File?, startCommand: String?): ShellCommand? = null
+    override fun shellCommand(distroId: String, hostCwd: File?, startCommand: String?, tabId: Int): ShellCommand? = null
+    override fun installedClis(distroId: String): List<CliLauncher> = emptyList()
+    override fun guestHome(distroId: String): File? = null
+    override fun setAgentStateListener(listener: (tabId: Int, state: String, json: String) -> Unit) = Unit
 }
 
 @Module
