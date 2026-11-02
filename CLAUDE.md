@@ -30,8 +30,9 @@ on-device Gemma 4 E2B/E4B via LiteRT-LM).
 | `:core:security` | `core/security/` | `KeyVault` (EncryptedSharedPreferences), `AiProvider` enum |
 | `:core:linux` | `core/linux/` | **Full flavor only.** proot launcher, distro installer, guest policy, Claude Code / Antigravity chat clients (`cli/`) |
 | `:core:terminal` | `core/terminal/` | Vendored Termux terminal-emulator / terminal-view (Apache-2.0, see its NOTICE) |
+| `:core:keyboard` | `core/keyboard/` | Bori Keyboard's typing engine for the terminal keys: dictionaries, spell correction, glide decoder, learning (GPL-3.0; dictionaries CC BY-SA 4.0, see its ATTRIBUTION.md). A copy of the bori-keyboard project's engine; sync changes by hand |
 
-Dependency direction: `app → core:{ai,build,editor,project,security,terminal}` (+ `core:linux`
+Dependency direction: `app → core:{ai,build,editor,project,security,terminal,keyboard}` (+ `core:linux`
 in the full flavor only); `core:ai → core:security, core:editor`; `core:build → core:project`;
 `core:linux → core:{ai,project,security}`.
 

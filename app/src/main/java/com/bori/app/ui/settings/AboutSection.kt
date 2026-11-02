@@ -42,8 +42,13 @@ private fun linuxNotices() = listOf(
 private val appNotices = listOf(
     Notice("Termux terminal-emulator and terminal-view 0.118.3", "Apache-2.0", "https://github.com/termux/termux-app"),
     Notice(
-        "SCOWL word lists 2020.12.07", "SCOWL license (MIT-like), © 2000-2018 Kevin Atkinson", "http://wordlist.aspell.net",
-        "The terminal keyboard's English words; the full notice is in the app's assets (keyboard/SCOWL-NOTICE.txt).",
+        "Bori Keyboard typing engine", "GPL-3.0-or-later", "https://github.com/Atom0131/Bori-Code",
+        "The terminal keyboard's spell correction, glide typing and learning.",
+    ),
+    Notice(
+        "Terminal keyboard dictionaries (English, Spanish)", "CC BY-SA 4.0", "https://github.com/hermitdave/FrequencyWords",
+        "Built from FrequencyWords (OpenSubtitles 2018, CC BY-SA 4.0), SCOWL / en_US Hunspell (SCOWL license, " +
+            "© 2000-2018 Kevin Atkinson), RLA-ES Spanish Hunspell (MPL 1.1 / LGPL 3 / GPL 3) and Tatoeba sentences (CC BY 2.0 FR).",
     ),
     Notice("AndroidX, Jetpack Compose, Room, Hilt", "Apache-2.0", "https://developer.android.com/jetpack"),
     Notice("Kotlin, kotlinx.coroutines, kotlinx.serialization", "Apache-2.0", "https://github.com/JetBrains/kotlin"),
@@ -74,7 +79,8 @@ internal fun AboutSection() {
     }
     Text("Bori - Code $version", style = MaterialTheme.typography.bodyMedium)
     Text(
-        "Open-source software in Bori Code. Tap one to open its source.",
+        "Bori Code is free software under the GNU GPL, version 3 or later. Open-source software in it, " +
+            "each under its own license; tap one to open its source.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(bottom = 8.dp),

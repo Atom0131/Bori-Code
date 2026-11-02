@@ -151,6 +151,7 @@ dependencies {
     implementation(project(":core:project"))
     implementation(project(":core:build"))
     implementation(project(":core:terminal"))
+    implementation(project(":core:keyboard"))
     // The Linux environment: full build only (see productFlavors).
     "fullImplementation"(project(":core:linux"))
 

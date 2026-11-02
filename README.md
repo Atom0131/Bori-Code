@@ -12,7 +12,7 @@ runs locally, and an AI agent can scaffold and modify your project for you.
 - **Version:** 4.2.0 (versionCode 8)
 - **Supports:** Android 8.0 – 15 (minSdk 26, targetSdk 35)
 - **Stack:** Kotlin · Jetpack Compose · Hilt · Room · DataStore · OkHttp
-- **License:** [Apache-2.0](LICENSE). Third-party notices are in [`NOTICE`](NOTICE).
+- **License:** [GPL-3.0-or-later](LICENSE) (Apache-2.0 before 2026-10-27). Third-party notices are in [`NOTICE`](NOTICE).
 
 
 ## Screenshots
@@ -117,7 +117,8 @@ and AI providers emit `Flow<ChatChunk>`. Details in
 | [docs/CHANGE-NOTES-2026-06.md](docs/CHANGE-NOTES-2026-06.md) | Recent changelog |
 
 ## License
-Bori - Code is licensed under the [Apache License 2.0](LICENSE). The license covers
+Bori - Code is licensed under the [GNU General Public License, version 3 or later](LICENSE)
+(it was Apache-2.0 until 2026-10-27, when Bori Keyboard's GPL typing engine came in). The license covers
 the code, not the "Bori" name or the app icon: a published fork needs its own name and
 icon. Bundled third-party software keeps its own license; see [`NOTICE`](NOTICE) and
 [`third_party/README.md`](third_party/README.md) (proot is GPL-2.0, and its source
