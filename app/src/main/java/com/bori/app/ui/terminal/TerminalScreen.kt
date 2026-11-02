@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.res.Configuration
+import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
@@ -38,13 +39,16 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.SpaceDashboard
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -68,6 +72,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -79,11 +85,17 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bori.app.terminal.AutoEnterStatus
+import com.bori.app.terminal.CliLauncher
 import com.bori.app.terminal.PaneLayout
 import com.bori.app.terminal.ShellKind
 import com.bori.app.terminal.Split
 import com.bori.app.terminal.TerminalTab
+import com.bori.app.terminal.TerminalTyping
+import com.bori.core.keyboard.layout.Language
+import com.bori.core.keyboard.predict.Aggressiveness
 import com.bori.app.ui.adaptive.LocalAppChrome
 import com.bori.app.ui.workspace.LocalPaneVisible
 import com.bori.app.ui.common.BoriTopBar
@@ -117,10 +129,23 @@ fun TerminalScreen(
     val alt by viewModel.alt.collectAsStateWithLifecycle()
     val systemKeyboard by viewModel.systemKeyboard.collectAsStateWithLifecycle()
     val keysShown by viewModel.keysShown.collectAsStateWithLifecycle()
+    val autoEnter by viewModel.autoEnter.collectAsStateWithLifecycle()
+    val autoEnterExplained by viewModel.autoEnterExplained.collectAsStateWithLifecycle()
+    var explainAutoEnter by remember { mutableStateOf<Int?>(null) }
+    val focusedTab = tabs.firstOrNull { it.id == layout.focusedTabId }
+    // Turning it on the first time explains what it does; after that it's one tap.
+    val toggleAutoEnter: (Int) -> Unit = { id ->
+        when {
+            id in autoEnter -> viewModel.setAutoEnter(id, false)
+            autoEnterExplained -> viewModel.setAutoEnter(id, true)
+            else -> explainAutoEnter = id
+        }
+    }
     val colors = BoriTheme.colors
 
     var fonts by rememberSaveable { mutableStateOf(List(Split.GRID.panes) { DEFAULT_FONT_SP }) }
     var newTabMenu by remember { mutableStateOf(false) }
+    var agentMenu by remember { mutableStateOf(false) }
     var splitMenu by remember { mutableStateOf(false) }
     // The view in each pane, so the keyboard reaches the focused one.
     val views = remember { mutableStateMapOf<Int, TerminalView>() }
@@ -173,6 +198,43 @@ fun TerminalScreen(
         }
     }
 
+    val keysSettings by viewModel.keysSettings.collectAsStateWithLifecycle()
+    // Keys go to the focused pane; one-shot Ctrl/Alt apply to them too (Ctrl+← moves by word, Shift+Tab for TUIs).
+    val sendKeyCode: (Int, Boolean) -> Unit = { code, shift ->
+        val view = views[focusedSlot.value]
+        if (view?.currentSession != null) {
+            var mod = if (shift) KeyHandler.KEYMOD_SHIFT else 0
+            if (viewModel.consumeCtrl()) mod = mod or KeyHandler.KEYMOD_CTRL
+            if (viewModel.consumeAlt()) mod = mod or KeyHandler.KEYMOD_ALT
+            view.handleKeyCode(code, mod)
+        }
+    }
+    var suggestions by remember { mutableStateOf(emptyList<String>() to -1) }
+    val typing = remember {
+        TerminalTyping({ viewModel.words.engine.value }, object : TerminalTyping.Output {
+            override fun text(s: String) {
+                val view = views[focusedSlot.value] ?: return
+                s.codePoints().forEach { view.inputCodePoint(it, false, false) }
+            }
+            // A correction's Backspaces must not use up a pending Ctrl or Alt.
+            override fun backspace(n: Int) {
+                val view = views[focusedSlot.value]?.takeIf { it.currentSession != null } ?: return
+                repeat(n) { view.handleKeyCode(KeyEvent.KEYCODE_DEL, 0) }
+            }
+            override fun lineBeforeCursor(): String = lineBeforeCursor(views[focusedSlot.value]?.currentSession)
+            override fun screenWords(): Set<String> = screenWords(views[focusedSlot.value]?.currentSession)
+        }).also { t -> t.onChange = { suggestions = t.suggestions to t.boldIndex } }
+    }
+    LaunchedEffect(keysSettings.autocorrect) {
+        typing.level = runCatching { Aggressiveness.valueOf(keysSettings.autocorrect) }.getOrDefault(Aggressiveness.NORMAL)
+    }
+    // The dictionary loads the first time the keys open (about a second, off the main thread).
+    LaunchedEffect(keysShown, keysSettings.language) {
+        if (keysShown) viewModel.words.load(Language.fromTag(keysSettings.language))
+    }
+    // Another pane, another line: the word being typed there is done.
+    LaunchedEffect(layout.focused) { typing.breakWord() }
+
     Scaffold(
         containerColor = colors.terminalBackground,
         // The shell's bottom bar (or its padding when unfolded) already clears the gesture bar.
@@ -203,6 +265,42 @@ fun TerminalScreen(
                                             onClick = { splitMenu = false; viewModel.setSplit(split) },
                                         )
                                     }
+                                }
+                            }
+                        }
+                        if (focusedTab != null && focusedTab.kind is ShellKind.Linux && !focusedTab.finished) {
+                            val on = focusedTab.id in autoEnter
+                            // The bot: it presses Enter for the agent's approval prompts.
+                            IconButton(onClick = { toggleAutoEnter(focusedTab.id) }) {
+                                Icon(
+                                    Icons.Default.SmartToy,
+                                    contentDescription = if (on) "Turn auto-enter off" else "Turn auto-enter on",
+                                    tint = if (on) colors.terminalAccent else colors.terminalText,
+                                )
+                            }
+                        }
+                        if (com.bori.app.flavor.HAS_LINUX) {
+                            Box {
+                                IconButton(
+                                    onClick = { agentMenu = true },
+                                    modifier = Modifier.semantics { contentDescription = "Open a coding CLI" },
+                                ) {
+                                    CodeRainIcon(tint = colors.terminalText)
+                                }
+                                DropdownMenu(expanded = agentMenu, onDismissRequest = { agentMenu = false }) {
+                                    val clis = remember(agentMenu) { if (agentMenu) viewModel.clis() else emptyList() }
+                                    val distros = clis.map { it.first }.distinct().size
+                                    clis.forEach { (distro, cli) ->
+                                        DropdownMenuItem(
+                                            text = { Text(cliLabel(cli, distro, distros > 1)) },
+                                            onClick = { agentMenu = false; viewModel.openCli(distro, cli) },
+                                        )
+                                    }
+                                    if (clis.isNotEmpty()) HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = { Text(if (clis.isEmpty()) "Install Claude Code or Antigravity…" else "Manage coding CLIs…") },
+                                        onClick = { agentMenu = false; onOpenLinuxSetup() },
+                                    )
                                 }
                             }
                         }
@@ -296,6 +394,9 @@ fun TerminalScreen(
                         onView = { view -> views[slot] = view },
                         // A replaced view may go after its successor registered; leave that one.
                         onViewGone = { view -> if (views[slot] === view) views.remove(slot) },
+                        launcher = { Launcher(viewModel, slot, onOpenLinuxSetup, colors) },
+                        autoEnter = tab?.let { autoEnter[it.id] },
+                        onAutoEnterOff = { tab?.let { viewModel.setAutoEnter(it.id, false) } },
                         colors = colors,
                         modifier = modifier,
                     )
@@ -321,28 +422,57 @@ fun TerminalScreen(
                 ctrl = ctrl,
                 alt = alt,
                 colors = colors,
+                settings = keysSettings,
+                onSettings = viewModel::setKeysSettings,
+                typing = typing,
+                suggestions = suggestions.first,
+                boldIndex = suggestions.second,
+                autoEnter = focusedTab?.takeIf { it.kind is ShellKind.Linux && !it.finished }?.let { it.id in autoEnter },
+                onToggleAutoEnter = { focusedTab?.let { toggleAutoEnter(it.id) } },
+                autoEnterTotals = {
+                    val t = viewModel.autoEnterTotals()
+                    "${t.today} Enters today, ${t.week} this week, ${t.month} this month, ${t.all} in all"
+                },
                 onToggleCtrl = viewModel::toggleCtrl,
                 onToggleAlt = viewModel::toggleAlt,
-                onKeyCode = { code, shift ->
-                    val view = views[layout.focused]
-                    if (view?.currentSession != null) {
-                        // The one-shot Ctrl/Alt apply to keys too (Ctrl+← moves by word, Shift+Tab for TUIs).
-                        var mod = if (shift) KeyHandler.KEYMOD_SHIFT else 0
-                        if (viewModel.consumeCtrl()) mod = mod or KeyHandler.KEYMOD_CTRL
-                        if (viewModel.consumeAlt()) mod = mod or KeyHandler.KEYMOD_ALT
-                        view.handleKeyCode(code, mod)
-                    }
-                },
-                onCodePoint = { cp -> views[layout.focused]?.inputCodePoint(cp, false, false) },
-                predictor = viewModel.predictor,
-                screenWords = { screenWords(views[layout.focused]?.currentSession) },
-                isEchoed = { word -> onCursorLine(views[layout.focused]?.currentSession, word) },
+                onKeyCode = sendKeyCode,
                 focusLineBox = focusLineBox,
                 onSendLine = { line -> viewModel.sendLine(tabs.firstOrNull { it.id == layout.focusedTabId }?.session, line) },
                 onShowKeys = viewModel::showKeys,
                 onSystemKeyboard = switchKeyboard,
             )
         }
+    }
+
+    explainAutoEnter?.let { id ->
+        val totals = remember { viewModel.autoEnterTotals() }
+        AlertDialog(
+            onDismissRequest = { explainAutoEnter = null },
+            title = { Text("Auto-enter") },
+            text = {
+                Text(
+                    "Bori presses Enter for you when the CLI in this tab asks to approve a step " +
+                        "(\"Do you want to proceed?\", [y/n], ❯ Yes). That approves every command and edit " +
+                        "it asks about, so only use it on work you trust. It never answers a question or a plan, " +
+                        "Linux's blocked commands stay blocked, and it turns itself off after 20 minutes " +
+                        "with nothing to approve.\n\nEnters so far: ${totals.today} today, ${totals.week} this week, ${totals.all} in all.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.markAutoEnterExplained()
+                    viewModel.setAutoEnter(id, true)
+                    explainAutoEnter = null
+                }) { Text("Turn on") }
+            },
+            dismissButton = { TextButton(onClick = { explainAutoEnter = null }) { Text("Cancel") } },
+        )
+    }
+
+    // Agent heads-ups are for when the terminal isn't in front of the user.
+    LifecycleResumeEffect(visible) {
+        viewModel.sessionManager.inView = visible
+        onPauseOrDispose { viewModel.sessionManager.inView = false }
     }
 
     // Coming back from another app (e.g. the browser after a CLI sign-in) leaves nothing focused,
@@ -421,6 +551,9 @@ private fun TerminalPane(
     onShowKeys: () -> Unit,
     onView: (TerminalView) -> Unit,
     onViewGone: (TerminalView) -> Unit,
+    launcher: @Composable () -> Unit,
+    autoEnter: AutoEnterStatus?,
+    onAutoEnterOff: () -> Unit,
     colors: BoriColors,
     modifier: Modifier,
 ) {
@@ -475,12 +608,24 @@ private fun TerminalPane(
                 )
             }
         } else {
-            Text(
-                "Empty pane. Pick a session above, or tap + for a new one.",
-                color = colors.terminalText,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.align(Alignment.Center).padding(16.dp).clickable { viewModel.focus(slot) },
-            )
+            Box(Modifier.align(Alignment.Center)) { launcher() }
+        }
+
+        if (autoEnter != null) {
+            // Always in sight, full screen too; a tap turns it off.
+            Surface(
+                color = colors.terminalAccent.copy(alpha = 0.85f),
+                shape = RoundedCornerShape(50),
+                modifier = Modifier.align(Alignment.TopCenter).padding(6.dp).clickable(onClick = onAutoEnterOff),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                ) {
+                    Icon(Icons.Default.SmartToy, contentDescription = null, tint = colors.terminalBackground, modifier = Modifier.size(14.dp))
+                    Text(" auto-enter · ${autoEnter.enters}", color = colors.terminalBackground, fontSize = 12.sp)
+                }
+            }
         }
 
         if (tab?.finished == true) {
@@ -527,6 +672,40 @@ private fun TerminalPane(
         }
         v.onScreenUpdated()
         if (focused) v.requestFocus()
+    }
+}
+
+private fun cliLabel(cli: CliLauncher, distro: String, showDistro: Boolean) =
+    if (showDistro) "${cli.title} (${distro.replaceFirstChar { it.uppercase() }})" else cli.title
+
+/** An empty pane: one tap opens a shell or a coding CLI in it. */
+@Composable
+private fun Launcher(viewModel: TerminalViewModel, slot: Int, onOpenLinuxSetup: () -> Unit, colors: BoriColors) {
+    val distros = remember { viewModel.installedDistros() }
+    val clis = remember { viewModel.clis() }
+    val open: (() -> Unit) -> Unit = { action -> viewModel.focus(slot); action() }
+    Column(
+        modifier = Modifier.padding(16.dp).widthIn(max = 320.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("Open in this pane", color = colors.terminalText, style = MaterialTheme.typography.titleSmall)
+        clis.forEach { (distro, cli) ->
+            OutlinedButton(onClick = { open { viewModel.openCli(distro, cli) } }, modifier = Modifier.fillMaxWidth()) {
+                Text(cliLabel(cli, distro, distros.size > 1), color = colors.terminalText)
+            }
+        }
+        distros.forEach { distro ->
+            OutlinedButton(onClick = { open { viewModel.open(ShellKind.Linux(distro)) } }, modifier = Modifier.fillMaxWidth()) {
+                Text("Linux shell (${distro.replaceFirstChar { it.uppercase() }})", color = colors.terminalText)
+            }
+        }
+        OutlinedButton(onClick = { open { viewModel.open(ShellKind.Android) } }, modifier = Modifier.fillMaxWidth()) {
+            Text("Android shell", color = colors.terminalText)
+        }
+        if (com.bori.app.flavor.HAS_LINUX && distros.isEmpty()) {
+            TextButton(onClick = onOpenLinuxSetup) { Text("Set up Linux…") }
+        }
     }
 }
 
@@ -606,12 +785,13 @@ private fun screenWords(session: TerminalSession?): Set<String> {
     return SCREEN_WORD.findAll(text).map { it.value.trimEnd('.', '-') }.filter { it.length >= 3 }.toSet()
 }
 
-/** Whether [word] is on the cursor's line or the two above (a wrap, or Enter since): the shell echoed it. */
-private fun onCursorLine(session: TerminalSession?, word: String): Boolean {
-    val emulator = session?.emulator ?: return false
-    val row = emulator.cursorRow
-    val top = maxOf(row - 2, -emulator.screen.activeTranscriptRows)
-    return emulator.screen.getSelectedText(0, top, emulator.mColumns, row).contains(word)
+/** The cursor's line up to the cursor: a shell prompt, or an agent's input box. */
+private fun lineBeforeCursor(session: TerminalSession?): String {
+    val emulator = session?.emulator ?: return ""
+    val screen = emulator.screen
+    val row = screen.allocateFullLineIfNecessary(screen.externalToInternalRow(emulator.cursorRow))
+    val end = row.findStartOfColumn(emulator.cursorCol.coerceIn(0, emulator.mColumns))
+    return String(row.mText, 0, end)
 }
 
 private val SCREEN_WORD = Regex("[A-Za-z0-9_][A-Za-z0-9_.\\-]+")
@@ -663,11 +843,14 @@ private class ScreenViewClient(
     override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession?): Boolean = false
     override fun onEmulatorSet() = Unit
 
-    override fun logError(tag: String?, message: String?) = Unit
-    override fun logWarn(tag: String?, message: String?) = Unit
-    override fun logInfo(tag: String?, message: String?) = Unit
+    // Into logcat, so a keyboard or rendering problem leaves a trace to read later.
+    override fun logError(tag: String?, message: String?) { Log.e(LOG_TAG, "$tag: $message") }
+    override fun logWarn(tag: String?, message: String?) { Log.w(LOG_TAG, "$tag: $message") }
+    override fun logInfo(tag: String?, message: String?) { Log.i(LOG_TAG, "$tag: $message") }
     override fun logDebug(tag: String?, message: String?) = Unit
     override fun logVerbose(tag: String?, message: String?) = Unit
-    override fun logStackTraceWithMessage(tag: String?, message: String?, e: Exception?) = Unit
-    override fun logStackTrace(tag: String?, e: Exception?) = Unit
+    override fun logStackTraceWithMessage(tag: String?, message: String?, e: Exception?) { Log.e(LOG_TAG, "$tag: $message", e) }
+    override fun logStackTrace(tag: String?, e: Exception?) { Log.e(LOG_TAG, tag.orEmpty(), e) }
 }
+
+private const val LOG_TAG = "BoriTerm"

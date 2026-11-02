@@ -3,7 +3,11 @@ package com.bori.app.terminal
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import com.bori.app.service.StatusNotifier
+import com.bori.app.service.StatusNotifier.AgentState
 import com.bori.app.service.TerminalService
 import com.bori.core.project.PhantomProcesses
 import com.bori.core.project.ProjectRepository
@@ -14,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.atomic.AtomicInteger
@@ -35,7 +40,14 @@ data class TerminalTab(
     val finished: Boolean = false,
     /** It ended because Android killed it (see [PhantomProcesses]), not because the shell exited. */
     val killed: Boolean = false,
+    /** The CLI it was opened to run ("claude", "antigravity"), or null for a plain shell. */
+    val command: String? = null,
+    /** The coding agent in it, by name, for the status notification; null for a plain shell. */
+    val agent: String? = null,
 )
+
+/** Auto-enter on one tab: [enters] this run, and why the last one went. */
+data class AutoEnterStatus(val enters: Int = 0, val lastReason: String? = null)
 
 /**
  * Owns every terminal session, so they outlive the Terminal screen: leaving the screen or
@@ -72,6 +84,149 @@ class TerminalSessionManager @Inject constructor(
 
     fun installedDistros(): List<String> = linux.installedDistros()
 
+    fun installedClis(distroId: String): List<CliLauncher> = linux.installedClis(distroId)
+
+    private val autoEnters = HashMap<Int, AutoEnter>()
+    private val _autoEnter = MutableStateFlow<Map<Int, AutoEnterStatus>>(emptyMap())
+    /** The tabs auto-enter is on for, by tab id. */
+    val autoEnter: StateFlow<Map<Int, AutoEnterStatus>> = _autoEnter.asStateFlow()
+
+    val autoEnterStats by lazy { AutoEnterStats(File(context.filesDir, "auto-enter")) }
+
+    private val main = Handler(Looper.getMainLooper())
+    private var checkPending = false
+
+    fun setAutoEnter(id: Int, on: Boolean) {
+        val tab = _tabs.value.firstOrNull { it.id == id } ?: return
+        if (on) {
+            if (id in autoEnters) return
+            val distro = (tab.kind as? ShellKind.Linux)?.distroId
+            val agyHome = if (tab.command == "antigravity" && distro != null) linux.guestHome(distro) else null
+            autoEnters[id] = AutoEnter(tab.session, agyHome)
+            _autoEnter.update { it + (id to AutoEnterStatus()) }
+            ensureTicking()
+        } else {
+            if (autoEnters.remove(id) == null) return
+            _autoEnter.update { it - id }
+        }
+        publish()
+    }
+
+    /** Whether the user is looking at the terminal: heads-ups are for when they aren't. */
+    @Volatile var inView = false
+
+    private val agentStates = HashMap<Int, AgentState>()
+    private val agyChecked = HashMap<Int, Long>()
+
+    init {
+        linux.setAgentStateListener(::onAgentState)
+    }
+
+    /** A Claude Code hook (GuestPolicy's status script) reported [state] for tab [tabId]. */
+    private fun onAgentState(tabId: Int, state: String, json: String) {
+        val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return
+        // Only Claude Code has the hooks, so a plain shell that reports is running it.
+        if (tab.agent == null) updateTab(tab.session) { it.copy(agent = "Claude Code") }
+        var detail: String? = null
+        val next = when (state) {
+            "working" -> AgentState.WORKING
+            "done" -> AgentState.DONE
+            "notify" -> {
+                detail = runCatching { JSONObject(json).optString("message") }.getOrNull()?.ifBlank { null }
+                // The other notification is "waiting for your input" a minute after a turn: nothing new.
+                if (detail?.contains("permission", ignoreCase = true) == true) AgentState.WAITING else return
+            }
+            else -> return
+        }
+        setAgentState(tabId, next, detail)
+    }
+
+    private fun setAgentState(tabId: Int, next: AgentState, detail: String?) {
+        val prev = agentStates.put(tabId, next)
+        if (prev == next) return
+        publish()
+        val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return
+        val name = tab.agent ?: tab.title
+        if (inView) return
+        when (next) {
+            // Auto-enter answers it in a moment.
+            AgentState.WAITING -> if (tabId !in autoEnters) StatusNotifier.alert(context, "$name needs you", detail ?: "It's waiting for your approval")
+            AgentState.DONE -> if (prev == AgentState.WORKING) StatusNotifier.alert(context, "$name is done", tab.title)
+            AgentState.WORKING -> Unit
+        }
+    }
+
+    /** Antigravity has no hooks: its transcript says whether it's working, waiting or done. */
+    private fun pollAgy() {
+        for (tab in _tabs.value) {
+            if (tab.command != "antigravity" || tab.finished) continue
+            val home = (tab.kind as? ShellKind.Linux)?.distroId?.let(linux::guestHome) ?: continue
+            val file = AgyTranscript.latest(home) ?: continue
+            val modified = file.lastModified()
+            if (agyChecked[tab.id] == modified) continue
+            agyChecked[tab.id] = modified
+            if (System.currentTimeMillis() - modified > AgyTranscript.MAX_AGE_MS) continue
+            val turn = AgyTranscript.read(file) ?: continue
+            val state = when {
+                turn.pending != null || turn.asksUser -> AgentState.WAITING
+                turn.complete -> AgentState.DONE
+                else -> AgentState.WORKING
+            }
+            setAgentState(tab.id, state, turn.pending?.let { "Approve ${it.name}?" } ?: if (turn.asksUser) "It has a question for you" else null)
+        }
+    }
+
+    /** Puts the agents and tabs in the status notification. */
+    private fun publish() {
+        val tabs = _tabs.value.filterNot { it.finished }
+        val enters = _autoEnter.value
+        StatusNotifier.agents = tabs.filter { it.agent != null }.map { tab ->
+            StatusNotifier.Agent(tab.agent!!, agentStates[tab.id], enters[tab.id]?.enters)
+        }
+        StatusNotifier.terminalTabs = tabs.size
+        StatusNotifier.refresh(context)
+    }
+
+    private fun ensureTicking() {
+        main.removeCallbacks(tick)
+        main.postDelayed(tick, TICK_MS)
+    }
+
+    /** Checks every auto-enter tab: a prompt that comes up with no output after it still gets its Enter. */
+    private val tick: Runnable = object : Runnable {
+        override fun run() {
+            checkAutoEnter()
+            pollAgy()
+            if (autoEnters.isNotEmpty() || _tabs.value.any { it.command == "antigravity" && !it.finished }) {
+                main.postDelayed(this, TICK_MS)
+            }
+        }
+    }
+
+    private fun checkAutoEnter(only: TerminalSession? = null) {
+        val now = System.currentTimeMillis()
+        for ((id, auto) in autoEnters.toList()) {
+            val tab = _tabs.value.firstOrNull { it.id == id }
+            if (tab == null || tab.finished) { setAutoEnter(id, false); continue }
+            if (only != null && tab.session !== only) continue
+            if (auto.check(now)) {
+                autoEnterStats.add()
+                _autoEnter.update { m -> m[id]?.let { m + (id to it.copy(enters = it.enters + 1, lastReason = auto.lastReason)) } ?: m }
+                publish()
+            } else if (auto.idle(now)) {
+                setAutoEnter(id, false)
+                StatusNotifier.alert(context, "Auto-enter is off", "Nothing to approve for 20 minutes in ${tab.agent ?: tab.title}")
+            }
+        }
+    }
+
+    /** New output: look again shortly, once the screen has settled. */
+    private fun scheduleAutoEnterCheck() {
+        if (autoEnters.isEmpty() || checkPending) return
+        checkPending = true
+        main.postDelayed({ checkPending = false; checkAutoEnter() }, SETTLE_MS)
+    }
+
     /**
      * Opens a new tab running [kind] in [hostCwd]. For a Linux tab, [startCommand] runs first
      * (a coding CLI) and the tab drops to a normal shell when it exits. It's part of the shell's
@@ -79,11 +234,16 @@ class TerminalSessionManager @Inject constructor(
      */
     fun open(kind: ShellKind, hostCwd: File? = null, startCommand: String? = null, title: String? = null): TerminalTab {
         val id = nextId.getAndIncrement()
-        val linuxCmd = (kind as? ShellKind.Linux)?.let { linux.shellCommand(it.distroId, hostCwd, startCommand) }
+        val linuxCmd = (kind as? ShellKind.Linux)?.let { linux.shellCommand(it.distroId, hostCwd, startCommand, id) }
         // No Linux environment in this build: an Android shell, under its own name.
         val shownKind = if (kind is ShellKind.Linux && linuxCmd == null) ShellKind.Android else kind
         val session = if (linuxCmd != null) linuxSession(linuxCmd) else androidShell(hostCwd)
-        val tab = TerminalTab(id, shownKind, session, if (shownKind == kind) title ?: defaultTitle(kind) else defaultTitle(shownKind))
+        val tab = TerminalTab(
+            id, shownKind, session,
+            if (shownKind == kind) title ?: defaultTitle(kind) else defaultTitle(shownKind),
+            command = startCommand.takeIf { linuxCmd != null },
+            agent = title.takeIf { startCommand != null && linuxCmd != null },
+        )
         _tabs.update { it + tab }
         // A new session goes into an empty pane if there is one, else the focused pane.
         _layout.update { layout ->
@@ -91,6 +251,8 @@ class TerminalSessionManager @Inject constructor(
             layout.copy(slots = layout.slots.toMutableList().also { it[slot] = id }, focused = slot)
         }
         TerminalService.start(context)
+        publish()
+        if (tab.command == "antigravity") ensureTicking()
         return tab
     }
 
@@ -148,6 +310,7 @@ class TerminalSessionManager @Inject constructor(
 
     fun close(id: Int) {
         val tab = _tabs.value.firstOrNull { it.id == id } ?: return
+        setAutoEnter(id, false)
         tab.session.finishIfRunning()
         val remaining = _tabs.value.filterNot { it.id == id }
         _tabs.value = remaining
@@ -159,13 +322,19 @@ class TerminalSessionManager @Inject constructor(
             }
             layout.copy(slots = slots)
         }
+        agentStates.remove(id)
+        agyChecked.remove(id)
+        publish()
         if (remaining.isEmpty()) TerminalService.stop(context)
     }
 
     fun closeAll() {
-        _tabs.value.forEach { it.session.finishIfRunning() }
+        _tabs.value.forEach { setAutoEnter(it.id, false); it.session.finishIfRunning() }
         _tabs.value = emptyList()
         _layout.update { it.copy(slots = List(it.split.panes) { null }, focused = 0) }
+        agentStates.clear()
+        agyChecked.clear()
+        publish()
         TerminalService.stop(context)
     }
 
@@ -202,6 +371,7 @@ class TerminalSessionManager @Inject constructor(
     private val client = object : TerminalSessionClient {
         override fun onTextChanged(changedSession: TerminalSession) {
             screenListeners.forEach { it(changedSession) }
+            scheduleAutoEnterCheck()
         }
 
         override fun onTitleChanged(changedSession: TerminalSession) {
@@ -214,6 +384,7 @@ class TerminalSessionManager @Inject constructor(
             val killed = PhantomProcesses.wasKilled(finishedSession.exitStatus, tail)
             updateTab(finishedSession) { it.copy(finished = true, killed = killed) }
             screenListeners.forEach { it(finishedSession) }
+            publish()
         }
 
         override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
@@ -246,5 +417,7 @@ class TerminalSessionManager @Inject constructor(
     private companion object {
         const val TAG = "Terminal"
         const val TRANSCRIPT_ROWS = 4000
+        const val TICK_MS = 1_000L
+        const val SETTLE_MS = 300L
     }
 }

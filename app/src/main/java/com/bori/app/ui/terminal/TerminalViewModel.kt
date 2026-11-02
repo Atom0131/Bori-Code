@@ -3,13 +3,16 @@
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bori.app.data.prefs.SessionStateStore
+import com.bori.app.data.prefs.TerminalKeysSettings
 import com.bori.app.data.project.ProjectStateHolder
+import com.bori.app.terminal.AutoEnterStatus
+import com.bori.app.terminal.CliLauncher
 import com.bori.app.terminal.PaneLayout
 import com.bori.app.terminal.ShellKind
 import com.bori.app.terminal.Split
 import com.bori.app.terminal.TerminalSessionManager
 import com.bori.app.terminal.TerminalTab
-import com.bori.app.terminal.WordPredictor
+import com.bori.app.terminal.TerminalWords
 import com.termux.terminal.TerminalSession
 import kotlinx.coroutines.delay
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -32,8 +35,8 @@ class TerminalViewModel @Inject constructor(
     private val manager: TerminalSessionManager,
     private val projectStateHolder: ProjectStateHolder,
     private val sessionState: SessionStateStore,
-    /** Suggestions and swipe decoding for the terminal keyboard. */
-    val predictor: WordPredictor,
+    /** Bori Keyboard's dictionaries and learned words, for the terminal keys. */
+    val words: TerminalWords,
 ) : ViewModel() {
 
     val tabs: StateFlow<List<TerminalTab>> = manager.tabs
@@ -49,11 +52,32 @@ class TerminalViewModel @Inject constructor(
     val systemKeyboard: StateFlow<Boolean> =
         sessionState.terminalSystemKeyboard.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    val keysSettings: StateFlow<TerminalKeysSettings> =
+        sessionState.terminalKeys.stateIn(viewModelScope, SharingStarted.Eagerly, TerminalKeysSettings())
+
+    fun setKeysSettings(settings: TerminalKeysSettings) {
+        viewModelScope.launch { sessionState.setTerminalKeys(settings) }
+    }
+
     /** Whether Bori's keys are open (the top row always shows). Closed until the terminal is tapped, like the phone's. */
     private val _keysShown = MutableStateFlow(false)
     val keysShown: StateFlow<Boolean> = _keysShown.asStateFlow()
 
     val sessionManager: TerminalSessionManager get() = manager
+
+    /** Tabs with auto-enter on, by id. */
+    val autoEnter: StateFlow<Map<Int, AutoEnterStatus>> = manager.autoEnter
+
+    val autoEnterExplained: StateFlow<Boolean> =
+        sessionState.autoEnterExplained.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun setAutoEnter(id: Int, on: Boolean) = manager.setAutoEnter(id, on)
+
+    fun markAutoEnterExplained() {
+        viewModelScope.launch { sessionState.markAutoEnterExplained() }
+    }
+
+    fun autoEnterTotals() = manager.autoEnterStats.totals()
 
     init {
         if (manager.tabs.value.isEmpty()) {
@@ -75,9 +99,19 @@ class TerminalViewModel @Inject constructor(
     fun installedDistros(): List<String> = manager.installedDistros()
 
     fun open(kind: ShellKind) {
-        val projectDir = projectStateHolder.activeProject.value?.rootPath?.let(::File)
-        manager.open(kind, hostCwd = projectDir)
+        manager.open(kind, hostCwd = projectDir())
     }
+
+    /** The coding CLIs to offer, with the distro each opens in (all installed distros). */
+    fun clis(): List<Pair<String, CliLauncher>> =
+        manager.installedDistros().flatMap { distro -> manager.installedClis(distro).map { distro to it } }
+
+    /** A new tab running [cli] in the open project, dropping to a shell when it exits. */
+    fun openCli(distroId: String, cli: CliLauncher) {
+        manager.open(ShellKind.Linux(distroId), hostCwd = projectDir(), startCommand = cli.command, title = cli.title)
+    }
+
+    private fun projectDir(): File? = projectStateHolder.activeProject.value?.rootPath?.let(::File)
 
     fun select(id: Int) = manager.select(id)
 
