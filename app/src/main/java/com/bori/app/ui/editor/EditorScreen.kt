@@ -7,6 +7,8 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.filled.MoreVert
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
@@ -36,6 +38,7 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
@@ -156,6 +159,17 @@ fun EditorScreen(
     var contextMenuNode by remember { mutableStateOf<FileNode?>(null) }
     var contextMenuAction by remember { mutableStateOf<ContextMenuAction?>(null) }
     var inputDialogValue by remember { mutableStateOf("") }
+    // Folder that "Add from phone" copies into while the system picker is open.
+    var importTarget by remember { mutableStateOf<FileNode?>(null) }
+    var previewImagePath by remember { mutableStateOf<String?>(null) }
+    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        importTarget?.let { viewModel.importFiles(it, uris) }
+        importTarget = null
+    }
+    fun addFromPhone(folder: FileNode) {
+        importTarget = folder
+        importPicker.launch(arrayOf("*/*"))
+    }
 
     // ── Observed state ────────────────────────────────────────────────────────
     val fileTree by viewModel.fileTree.collectAsState()
@@ -205,6 +219,7 @@ fun EditorScreen(
             when (event) {
                 is EditorUiEvent.RequestStoragePermission -> showPermissionDialog = true
                 is EditorUiEvent.ShowError -> snackbarHostState.showSnackbar(event.message)
+                is EditorUiEvent.PreviewImage -> previewImagePath = event.path
             }
         }
     }
@@ -328,6 +343,10 @@ fun EditorScreen(
                 )
             }
         }
+    }
+
+    previewImagePath?.let { path ->
+        ImagePreviewDialog(path = path, onDismiss = { previewImagePath = null })
     }
 
     if (showLayoutPreview) {
@@ -563,12 +582,9 @@ fun EditorScreen(
                                     if (activeSidebarPanel == SidebarPanel.EXPLORER) {
                                         IconButton(
                                             onClick = {
-                                                val root = fileTree.firstOrNull()
-                                                if (root != null) {
-                                                    inputDialogValue = ""
-                                                    contextMenuNode = root
-                                                    contextMenuAction = ContextMenuAction.NEW_FILE
-                                                }
+                                                inputDialogValue = ""
+                                                contextMenuNode = viewModel.rootNode()
+                                                contextMenuAction = ContextMenuAction.NEW_FILE
                                             },
                                             modifier = Modifier.size(32.dp),
                                         ) {
@@ -581,18 +597,26 @@ fun EditorScreen(
                                         }
                                         IconButton(
                                             onClick = {
-                                                val root = fileTree.firstOrNull()
-                                                if (root != null) {
-                                                    inputDialogValue = ""
-                                                    contextMenuNode = root
-                                                    contextMenuAction = ContextMenuAction.NEW_FOLDER
-                                                }
+                                                inputDialogValue = ""
+                                                contextMenuNode = viewModel.rootNode()
+                                                contextMenuAction = ContextMenuAction.NEW_FOLDER
                                             },
                                             modifier = Modifier.size(32.dp),
                                         ) {
                                             Icon(
                                                 Icons.Default.CreateNewFolder,
                                                 contentDescription = "New folder",
+                                                modifier = Modifier.size(18.dp),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { addFromPhone(viewModel.rootNode()) },
+                                            modifier = Modifier.size(32.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Default.AddPhotoAlternate,
+                                                contentDescription = "Add from phone",
                                                 modifier = Modifier.size(18.dp),
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                             )
@@ -678,6 +702,11 @@ fun EditorScreen(
                                                         text = { Text("New Folder") },
                                                         leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) },
                                                         onClick = { inputDialogValue = ""; contextMenuAction = ContextMenuAction.NEW_FOLDER },
+                                                    )
+                                                    DropdownMenuItem(
+                                                        text = { Text("Add from phone") },
+                                                        leadingIcon = { Icon(Icons.Default.AddPhotoAlternate, null) },
+                                                        onClick = { contextMenuNode = null; addFromPhone(node) },
                                                     )
                                                 }
                                                 DropdownMenuItem(

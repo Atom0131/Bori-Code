@@ -1,7 +1,9 @@
 ﻿package com.bori.app.ui.editor
 
 import android.app.Application
+import android.net.Uri
 import android.os.Environment
+import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.bori.app.data.build.DiagnosticsStateHolder
@@ -319,6 +321,14 @@ class EditorViewModel @Inject constructor(
 
     fun openFile(node: FileNode) {
         if (node.isDirectory) return
+        if (BinaryFiles.isImage(node.name)) {
+            _events.tryEmit(EditorUiEvent.PreviewImage(node.path))
+            return
+        }
+        if (BinaryFiles.isBinary(node.name)) {
+            _events.tryEmit(EditorUiEvent.ShowError("Can't open ${node.name} as text"))
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             resolveActiveProject(node.path)
             val content = runCatching { File(node.path).readText() }.getOrElse {
@@ -357,6 +367,9 @@ class EditorViewModel @Inject constructor(
 
     // ── File CRUD ────────────────────────────────────────────────────────────
 
+    /** The project folder itself, as a tree node: the parent for creating things at the top level. */
+    fun rootNode(): FileNode = FileNode(projectRoot.name, projectRoot.absolutePath, isDirectory = true)
+
     fun createFile(parent: FileNode, name: String) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
@@ -366,7 +379,7 @@ class EditorViewModel @Inject constructor(
             }.onFailure {
                 _events.emit(EditorUiEvent.ShowError("Cannot create file: ${it.message}"))
             }
-            refreshFileTree()
+            reloadShowing(parent)
         }
     }
 
@@ -377,8 +390,63 @@ class EditorViewModel @Inject constructor(
             }.onFailure {
                 _events.emit(EditorUiEvent.ShowError("Cannot create folder: ${it.message}"))
             }
-            refreshFileTree()
+            reloadShowing(parent)
         }
+    }
+
+    /**
+     * Copies files picked on the phone (photos, videos, anything) into [parent], so the CLI agents
+     * can look at them: they see the projects folder in Linux, and can't take pasted pictures.
+     */
+    fun importFiles(parent: FileNode, uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val resolver = getApplication<Application>().contentResolver
+        viewModelScope.launch(Dispatchers.IO) {
+            val dir = File(parent.path).apply { mkdirs() }
+            var added = 0
+            for (uri in uris) {
+                runCatching {
+                    val target = freeName(dir, displayName(uri))
+                    resolver.openInputStream(uri)!!.use { input ->
+                        target.outputStream().use { input.copyTo(it) }
+                    }
+                    added++
+                }.onFailure {
+                    _events.emit(EditorUiEvent.ShowError("Couldn't add a file: ${it.message}"))
+                }
+            }
+            reloadShowing(parent)
+            if (added > 0) {
+                val what = if (added == 1) "1 file" else "$added files"
+                _events.emit(EditorUiEvent.ShowError("Added $what to ${parent.name}"))
+            }
+        }
+    }
+
+    private fun displayName(uri: Uri): String {
+        val resolver = getApplication<Application>().contentResolver
+        val name = runCatching {
+            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                if (it.moveToFirst()) it.getString(0) else null
+            }
+        }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/')
+        return name?.replace('/', '_')?.takeIf { it.isNotBlank() } ?: "file"
+    }
+
+    /** [name] in [dir], or "name (2).ext", "name (3).ext"… when it's taken. */
+    private fun freeName(dir: File, name: String): File {
+        var file = File(dir, name)
+        val base = name.substringBeforeLast('.')
+        val ext = name.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" }
+        var n = 2
+        while (file.exists()) file = File(dir, "$base (${n++})$ext")
+        return file
+    }
+
+    /** Reloads the tree keeping open folders, and opens [parent] so a new item in it shows. */
+    private fun reloadShowing(parent: FileNode) {
+        if (parent.path != projectRoot.absolutePath) _expandedPaths.value = _expandedPaths.value + parent.path
+        reloadTreeKeepingExpanded()
     }
 
     fun renameNode(node: FileNode, newName: String) {
@@ -401,7 +469,7 @@ class EditorViewModel @Inject constructor(
                     }
                 }
             }
-            refreshFileTree()
+            reloadTreeKeepingExpanded()
         }
     }
 
@@ -416,7 +484,7 @@ class EditorViewModel @Inject constructor(
                 }
             runCatching { File(node.path).deleteRecursively() }
                 .onFailure { _events.emit(EditorUiEvent.ShowError("Delete failed: ${it.message}")) }
-            refreshFileTree()
+            reloadTreeKeepingExpanded()
         }
     }
 
@@ -542,6 +610,7 @@ class EditorViewModel @Inject constructor(
 sealed interface EditorUiEvent {
     data object RequestStoragePermission : EditorUiEvent
     data class ShowError(val message: String) : EditorUiEvent
+    data class PreviewImage(val path: String) : EditorUiEvent
 }
 
 enum class SidebarPanel { EXPLORER, SEARCH, GIT }

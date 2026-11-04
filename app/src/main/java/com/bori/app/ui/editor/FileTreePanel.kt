@@ -16,6 +16,8 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -102,7 +104,11 @@ private fun FileTreeRow(
         } else {
             Spacer(Modifier.width(24.dp))
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.InsertDriveFile,
+                imageVector = when {
+                    BinaryFiles.isImage(node.name) -> Icons.Default.Image
+                    BinaryFiles.isVideo(node.name) -> Icons.Default.Movie
+                    else -> Icons.AutoMirrored.Filled.InsertDriveFile
+                },
                 contentDescription = null,
                 tint = if (isActive) MaterialTheme.colorScheme.primary
                        else MaterialTheme.colorScheme.onSurfaceVariant,

@@ -15,3 +15,16 @@ data class FileNode(
     val isDirectory: Boolean,
     val children: List<FileNode>? = null,
 )
+
+/** Files the editor can't show as text: pictures and videos (shown or listed differently) and other binaries. */
+object BinaryFiles {
+    private val IMAGES = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp")
+    private val VIDEOS = setOf("mp4", "webm", "mkv", "mov", "3gp")
+    private val OTHER = setOf("pdf", "zip", "apk", "aab", "jar", "so", "keystore", "jks")
+
+    private fun ext(name: String) = name.substringAfterLast('.', "").lowercase()
+
+    fun isImage(name: String) = ext(name) in IMAGES
+    fun isVideo(name: String) = ext(name) in VIDEOS
+    fun isBinary(name: String) = ext(name).let { it in IMAGES || it in VIDEOS || it in OTHER }
+}
