@@ -6,6 +6,33 @@ GPL code.
 
 ---
 
+## 4.4.0 (November 4): agents keep working, auto-enter from script 6, speed
+
+**Agents no longer stall when the screen goes off.** Terminal agents had no wake lock, so with the
+screen off or another app open, Android could suspend the CPU and the agent waited until the phone
+woke. Bori Code now holds a partial wake lock while an agent works, or waits on a prompt auto-enter
+will answer (`TerminalService.keepAwake`, driven by `TerminalSessionManager.updateWake`). It lets go
+when the agent is done, waits for the user, or prints nothing for 15 minutes, and the status
+notification says so while it's held.
+
+**Less work under proot.** Claude Code's managed settings turn off its auto-updater and
+non-essential traffic (More → Linux updates it). Both CLIs get a "speed on a phone" rule: fewer,
+bigger commands, `rg`, no polling, long jobs run once with a log. `bori-bench` in the guest times
+program starts, file access, git, search and CPU. The terminal redraws at most once a frame, and not
+for hidden panes or while the app is in the background.
+
+**Auto-enter, from the CachyOS agy auto-enter script 6.** It ignores Antigravity sessions from
+before it was turned on, never fires from the screen when the transcript says the turn is done or
+asks the user, waits 3 s between screen-based Enters and says "agy ignored Enter 3×" when it's
+stuck. Its stats use the helper's file format with backups and recovery, and Export/Import stats
+(keys settings) move counts between the phone and the PC (higher count wins per day).
+
+**Also:** Add from phone and image preview in the code editor; GitHub browser sign-in for the Linux
+environment (when the build has OAuth App keys; otherwise gh's code sign-in); the `fullFast` build
+type and phone tuning scripts for testing; the app's first unit tests.
+
+---
+
 ## Terminal keyboard: Bori Keyboard itself, typing into a type bar
 
 **Before.** The terminal had its own compact keyboard. It used Bori Keyboard's dictionaries, but
