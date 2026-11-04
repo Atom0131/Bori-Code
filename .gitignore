@@ -13,6 +13,7 @@ local.properties
 *.jks
 *.keystore
 keystore.properties
+github-oauth.properties
 
 # APK/AAB output
 *.apk

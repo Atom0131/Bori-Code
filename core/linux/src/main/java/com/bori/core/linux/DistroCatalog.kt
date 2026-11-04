@@ -58,7 +58,7 @@ object DistroCatalog {
             set -e
             xbps-install -Syuy xbps
             xbps-install -Syuy
-            xbps-install -y bash nodejs git ripgrep curl ca-certificates openssh python3
+            xbps-install -y bash nodejs git github-cli ripgrep curl ca-certificates openssh python3
             xbps-remove -Oy
         """.trimIndent(),
         installedSizeMb = 700,
@@ -84,7 +84,7 @@ object DistroCatalog {
             set -e
             apk update
             apk upgrade
-            apk add bash nodejs npm git ripgrep curl ca-certificates openssh-client python3
+            apk add bash nodejs npm git github-cli ripgrep curl ca-certificates openssh-client python3
         """.trimIndent(),
         installedSizeMb = 200,
         musl = true,

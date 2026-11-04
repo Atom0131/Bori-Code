@@ -80,6 +80,7 @@ object StatusNotifier {
             }
             val shells = terminalTabs - agents.size
             if (shells > 0) add(if (shells == 1) "1 terminal tab" else "$shells terminal tabs")
+            if (TerminalService.awake) add("Keeping the phone awake while it works")
         }
         return NotificationCompat.Builder(context, CHANNEL_ID)
             .setContentTitle("Bori - Code · $mode")

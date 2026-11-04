@@ -384,11 +384,44 @@ class DistroInstaller @Inject constructor(
         }
 
     /** [cli]'s installed version in [distroId], or null when it isn't installed. Quick, no job. */
-    suspend fun cliVersion(distroId: String, cli: CodingCli): String? = withContext(Dispatchers.IO) {
+    suspend fun cliVersion(distroId: String, cli: CodingCli): String? = firstLine(distroId, cli.versionScript)
+
+    /**
+     * The GitHub account gh is signed in to in [distroId], or null. Reads only the account name
+     * from gh's config, never the token, and works offline.
+     */
+    suspend fun githubLogin(distroId: String): String? = firstLine(
+        distroId,
+        "command -v gh >/dev/null 2>&1 && gh config get -h github.com user 2>/dev/null",
+    )
+
+    /**
+     * Hands [token] (from Bori Code's GitHub browser sign-in) to gh in [distroId] through
+     * `bori-github token`, on stdin so it never shows in a process list. Installs gh first if
+     * needed. Returns the signed-in account, or null when gh refused the token.
+     */
+    suspend fun signInGitHub(distroId: String, token: String): String? = withContext(Dispatchers.IO) {
+        if (status(distroId) != DistroStatus.INSTALLED) return@withContext null
+        val ok = runCatching {
+            val process = startGuest(distroId, "${GuestPolicy.GITHUB_SCRIPT} token")
+            try {
+                process.outputStream.bufferedWriter().use { it.write(token + "\n") }
+                // Drain the output (gh's messages; never the token) so the guest can't block on a full pipe.
+                process.inputStream.bufferedReader().readText()
+                process.waitFor(3, java.util.concurrent.TimeUnit.MINUTES) && process.exitValue() == 0
+            } finally {
+                process.destroy()
+            }
+        }.getOrDefault(false)
+        if (ok) githubLogin(distroId) else null
+    }
+
+    /** The first line [script] prints in [distroId] when it exits 0 within 20 s, else null. */
+    private suspend fun firstLine(distroId: String, script: String): String? = withContext(Dispatchers.IO) {
         if (status(distroId) != DistroStatus.INSTALLED) return@withContext null
         val output = StringBuilder()
         val code = runCatching {
-            val process = startGuest(distroId, cli.versionScript)
+            val process = startGuest(distroId, script)
             val reader = process.inputStream.bufferedReader()
             val finished = process.waitFor(20, java.util.concurrent.TimeUnit.SECONDS)
             if (!finished) process.destroy()

@@ -35,9 +35,12 @@ class GuestPolicy @Inject constructor(
         runCatching { mergeAntigravitySettings(rootfs) }.onFailure { Log.w(TAG, "Antigravity settings", it) }
         runCatching { writeBrowserShim(rootfs) }.onFailure { Log.w(TAG, "xdg-open shim", it) }
         runCatching { writeStatusScript(rootfs) }.onFailure { Log.w(TAG, "Status script", it) }
+        runCatching { writeBenchScript(rootfs) }.onFailure { Log.w(TAG, "Bench script", it) }
         runCatching { writeProjectRules(rootfs) }.onFailure { Log.w(TAG, "Project rules", it) }
         runCatching { writeShellPrompt(rootfs) }.onFailure { Log.w(TAG, "Shell prompt", it) }
         runCatching { trustWorkspaceRepos(rootfs) }.onFailure { Log.w(TAG, "Git safe.directory", it) }
+        runCatching { useGhForGitHub(rootfs) }.onFailure { Log.w(TAG, "Git credential helper", it) }
+        runCatching { writeGitHubLogin(rootfs) }.onFailure { Log.w(TAG, "GitHub sign-in script", it) }
     }
 
     /**
@@ -52,6 +55,64 @@ class GuestPolicy @Inject constructor(
         if (current.lineSequence().any { it.trim() == line }) return
         val separator = if (current.isEmpty() || current.endsWith("\n")) "" else "\n"
         file.writeText("$current$separator# Written by Bori Code: projects on shared storage have another owner.\n[safe]\n\t$line\n")
+    }
+
+    /**
+     * git asks gh for GitHub logins, so one `bori-github` sign-in covers git, gh and both CLIs. The
+     * empty `helper =` drops any helper set before it, as `gh auth setup-git` does.
+     */
+    private fun useGhForGitHub(rootfs: File) {
+        val file = File(rootfs, "etc/gitconfig")
+        val current = if (file.exists()) file.readText() else ""
+        if (current.lineSequence().any { it.trim() == GH_HELPER }) return
+        val separator = if (current.isEmpty() || current.endsWith("\n")) "" else "\n"
+        val sections = listOf("https://github.com", "https://gist.github.com")
+            .joinToString("") { "[credential \"$it\"]\n\thelper =\n\t$GH_HELPER\n" }
+        file.writeText("$current$separator# Written by Bori Code: git uses the GitHub sign-in from bori-github.\n$sections")
+    }
+
+    /**
+     * `bori-github` (run in a terminal tab from Bori Code's Linux settings) signs in to GitHub with
+     * gh's browser flow and, if git has no identity yet, sets the account's no-reply address.
+     * Installs gh first on distros set up before it was in the package list. The token stays in
+     * gh's own file; `bori-github logout` signs out. `bori-github token` reads a token from stdin
+     * instead (Bori Code's browser sign-in, [DistroInstaller.signInGitHub]).
+     */
+    private fun writeGitHubLogin(rootfs: File) {
+        val script = File(rootfs, GITHUB_SCRIPT.removePrefix("/"))
+        script.parentFile?.mkdirs()
+        script.writeText(
+            """
+            |#!/bin/sh
+            |# Written by Bori Code: one GitHub sign-in for git, gh, Claude Code and Antigravity.
+            |if [ "${'$'}1" = logout ]; then
+            |  gh auth logout --hostname github.com
+            |  exit ${'$'}?
+            |fi
+            |if ! command -v gh >/dev/null 2>&1; then
+            |  echo "Installing the GitHub CLI..."
+            |  if command -v xbps-install >/dev/null 2>&1; then xbps-install -Sy github-cli
+            |  elif command -v apk >/dev/null 2>&1; then apk add github-cli
+            |  fi
+            |  command -v gh >/dev/null 2>&1 || { echo "Couldn't install the GitHub CLI."; exit 1; }
+            |fi
+            |if [ "${'$'}1" = token ]; then
+            |  # Bori Code's browser sign-in pipes the token in on stdin; it's never on the command line.
+            |  gh auth login --hostname github.com --git-protocol https --with-token || exit 1
+            |else
+            |  echo "GitHub shows a one-time code below. Press Enter to open the sign-in page in your browser, then type the code there."
+            |  gh auth login --hostname github.com --git-protocol https --web --scopes repo,workflow,read:org,gist || exit 1
+            |fi
+            |set -- ${'$'}(gh api user --jq '.login + " " + (.id | tostring)' 2>/dev/null)
+            |if [ -n "${'$'}1" ]; then
+            |  git config --global user.name >/dev/null || git config --global user.name "${'$'}1"
+            |  git config --global user.email >/dev/null || git config --global user.email "${'$'}2+${'$'}1@users.noreply.github.com"
+            |  echo
+            |  echo "Signed in to GitHub as ${'$'}1. Claude Code, Antigravity and git can now use your repos."
+            |fi
+            |""".trimMargin(),
+        )
+        script.setExecutable(true, false)
     }
 
     /** A prompt that shows the folder (Void's default is just `bash-5.3#`). Login shells read profile.d. */
@@ -88,6 +149,26 @@ class GuestPolicy @Inject constructor(
             |  `app/src/main/AndroidManifest.xml`, sources under `app/src/main/java/<package path>/` and
             |  resources under `app/src/main/res/`. Bori Code lists it the next time it opens.
             |
+            |## Speed on a phone
+            |This Linux runs under proot, which slows every program start and file access several times
+            |compared with a PC (plain computation runs at full speed), and the phone heats up and slows
+            |down under long load. So:
+            |- Do more per command: one script or a `&&` chain instead of many small commands, and read
+            |  several files at once.
+            |- Search with `rg` (or `git grep`) in the project; never `find /` or `grep -r` over large trees.
+            |- Don't poll with `sleep` loops or `watch`, and don't re-run a whole test suite after each edit.
+            |- Long jobs (training, data processing): try a small input first, then start the full run once
+            |  in the background with its output going to a log file (`nohup cmd > run.log 2>&1 &`) and check
+            |  the log, rather than re-running it.
+            |
+            |## GitHub
+            |- `git push`, `git pull` and `gh` (GitHub CLI) work once the user has signed in; check with
+            |  `gh auth status`. If they haven't, ask them to tap "Sign in to GitHub" in Bori Code's
+            |  Settings > Linux environment. Never ask for a GitHub token or password.
+            |- To put a project on GitHub: `git init` if it isn't a repo yet, add a `.gitignore` (at least
+            |  `build/`, `.gradle/`, `local.properties`, `*.jks`, `keystore.properties`), commit, then
+            |  `gh repo create <name> --public --source . --push` (or `--private`). Ask the user which first.
+            |
             |## Working with other agents
             |Bori Code's built-in agent and the other CLI (Claude Code or Antigravity) may work on the same
             |project. They share three files in the project's `.bori/` folder:
@@ -122,6 +203,8 @@ class GuestPolicy @Inject constructor(
             // Each CLI's login stays its own.
             put("Read(//root/.gemini/**)")
             put("Edit(//root/.gemini/**)")
+            // The GitHub token; git and gh reach it through the shell, never the file tools.
+            put("Read(//root/.config/gh/**)")
         }
         // Each runs the status script, which tells Bori Code what Claude is doing in this tab
         // (its status notification). PostToolUse: an approved tool has run, so it's working again.
@@ -133,6 +216,12 @@ class GuestPolicy @Inject constructor(
                 put("deny", deny)
                 put("additionalDirectories", JSONArray())
                 put("disableBypassPermissionsMode", "disable")
+            })
+            // Background work that costs a lot under proot: Bori Code's Linux screen updates Claude, and
+            // the rest is telemetry and error reports.
+            put("env", JSONObject().apply {
+                put("DISABLE_AUTOUPDATER", "1")
+                put("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
             })
             put("hooks", JSONObject().apply {
                 put("UserPromptSubmit", hook("working"))
@@ -178,6 +267,8 @@ class GuestPolicy @Inject constructor(
                 "read_file(/root/.claude.json)",
                 "write_file(/root/.claude)",
                 "write_file(/root/.claude.json)",
+                "read_file(/root/.config/gh)",
+                "write_file(/root/.config/gh)",
             ).forEach { rule ->
                 if ((0 until denyRules.length()).none { denyRules.optString(it) == rule }) denyRules.put(rule)
             }
@@ -257,13 +348,60 @@ class GuestPolicy @Inject constructor(
         script.setExecutable(true, false)
     }
 
+    /**
+     * `bori-bench`: half a minute of timings that show where the time goes under proot (process starts,
+     * file access, git, search, plain computation), one line each, to compare with a PC or between builds.
+     */
+    private fun writeBenchScript(rootfs: File) {
+        val script = File(rootfs, BENCH_SCRIPT.removePrefix("/"))
+        script.parentFile?.mkdirs()
+        script.writeText(
+            """
+            |#!/bin/sh
+            |# Written by Bori Code: times what's slow under proot. Changes nothing outside /tmp.
+            |ms() { echo $(( ($(date +%s%N) - $1) / 1000000 )); }
+            |echo "bori-bench: $(uname -m), $(nproc) cores, $(date '+%F %T')"
+            |t=$(date +%s%N); i=0; while [ ${'$'}i -lt 200 ]; do /bin/true; i=$((i + 1)); done
+            |echo "200 program starts:    $(ms ${'$'}t) ms"
+            |find /usr -type f 2>/dev/null | head -n 5000 > /tmp/bori-bench.list
+            |t=$(date +%s%N); xargs stat < /tmp/bori-bench.list >/dev/null 2>&1
+            |echo "stat 5000 files:       $(ms ${'$'}t) ms"
+            |t=$(date +%s%N); dd if=/dev/zero of=/tmp/bori-bench.bin bs=1M count=64 2>/dev/null; sync
+            |echo "write 64 MB:           $(ms ${'$'}t) ms"
+            |rm -f /tmp/bori-bench.bin /tmp/bori-bench.list
+            |repo=$(git rev-parse --show-toplevel 2>/dev/null)
+            |[ -n "${'$'}repo" ] || repo=$(ls -d ${ProotLauncher.GUEST_WORKSPACE}/*/.git 2>/dev/null | head -n 1 | sed 's|/\.git${'$'}||')
+            |if [ -n "${'$'}repo" ] && command -v git >/dev/null; then
+            |  t=$(date +%s%N); git -C "${'$'}repo" status --porcelain >/dev/null 2>&1
+            |  echo "git status:            $(ms ${'$'}t) ms (${'$'}{repo##*/})"
+            |fi
+            |if command -v rg >/dev/null; then
+            |  t=$(date +%s%N); rg -l bori_bench_no_match ${ProotLauncher.GUEST_WORKSPACE} >/dev/null 2>&1
+            |  echo "rg over the workspace: $(ms ${'$'}t) ms"
+            |else
+            |  t=$(date +%s%N); grep -rl bori_bench_no_match ${ProotLauncher.GUEST_WORKSPACE} >/dev/null 2>&1
+            |  echo "grep -r workspace:     $(ms ${'$'}t) ms (no rg)"
+            |fi
+            |t=$(date +%s%N); awk 'BEGIN { s = 0; for (i = 0; i < 3000000; i++) s += i % 7; print s }' >/dev/null
+            |echo "CPU (awk 3M loops):    $(ms ${'$'}t) ms"
+            |""".trimMargin(),
+        )
+        script.setExecutable(true, false)
+    }
+
     /** org.json escapes every "/" as "\\/" (valid, but unreadable for files people open by hand). */
     private fun JSONObject.toPrettyJson(): String = toString(2).replace("\\/", "/") + "\n"
 
-    private companion object {
+    internal companion object {
         const val TAG = "GuestPolicy"
 
         const val STATUS_SCRIPT = "/usr/local/bin/bori-status"
+
+        const val BENCH_SCRIPT = "/usr/local/bin/bori-bench"
+
+        const val GITHUB_SCRIPT = "/usr/local/bin/bori-github"
+
+        const val GH_HELPER = "helper = !gh auth git-credential"
 
         /** Where the workspace was mounted before it became [ProotLauncher.GUEST_WORKSPACE]. */
         const val LEGACY_PROJECTS = "/root/projects"

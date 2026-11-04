@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.ServiceCompat
 import com.bori.app.terminal.ProcessReaper
 
@@ -30,8 +31,32 @@ class TerminalService : Service() {
         }
 
         fun stop(context: Context) {
+            keepAwake(context, false)
             context.stopService(Intent(context, TerminalService::class.java))
         }
+
+        private var agentLock: PowerManager.WakeLock? = null
+
+        /** Whether the CPU is being kept awake for a working agent ([keepAwake]). */
+        @Volatile var awake = false
+            private set
+
+        /**
+         * Keeps the CPU running while a terminal agent works, so it doesn't stall when the screen goes off
+         * or the user switches apps. Each call while [on] re-arms the [AGENT_LOCK_CAP_MS] cap, so the lock
+         * lapses on its own if nothing calls again. The screen stays free to turn off.
+         */
+        @Synchronized
+        fun keepAwake(context: Context, on: Boolean) {
+            val lock = agentLock ?: context.applicationContext.getSystemService(PowerManager::class.java)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "bori:agent")
+                .apply { setReferenceCounted(false) }
+                .also { agentLock = it }
+            if (on) lock.acquire(AGENT_LOCK_CAP_MS) else if (lock.isHeld) lock.release()
+            awake = on
+        }
+
+        private const val AGENT_LOCK_CAP_MS = 30 * 60_000L
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -49,6 +74,7 @@ class TerminalService : Service() {
     }
 
     override fun onDestroy() {
+        keepAwake(this, false)
         StatusNotifier.release(TAG)
         super.onDestroy()
     }

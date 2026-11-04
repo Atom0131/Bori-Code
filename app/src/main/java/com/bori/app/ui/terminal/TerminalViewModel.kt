@@ -1,6 +1,11 @@
 ﻿package com.bori.app.ui.terminal
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.lifecycle.viewModelScope
 import com.bori.app.data.prefs.SessionStateStore
 import com.bori.app.data.prefs.TerminalKeysSettings
@@ -34,6 +39,7 @@ class TerminalViewModel @Inject constructor(
     private val manager: TerminalSessionManager,
     private val projectStateHolder: ProjectStateHolder,
     private val sessionState: SessionStateStore,
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     val tabs: StateFlow<List<TerminalTab>> = manager.tabs
@@ -75,6 +81,23 @@ class TerminalViewModel @Inject constructor(
     }
 
     fun autoEnterTotals() = manager.autoEnterStats.totals()
+
+    /** Writes auto-enter's counts to [uri] (same file as the PC helper's EXPORT STATS). */
+    suspend fun exportAutoEnterStats(uri: Uri): String = withContext(Dispatchers.IO) {
+        runCatching {
+            val out = context.contentResolver.openOutputStream(uri, "wt") ?: error("Couldn't open the file")
+            "Saved ${manager.autoEnterStats.exportTo(out)} Enters"
+        }.getOrElse { "Export failed: ${it.message}" }
+    }
+
+    /** Merges a stats file in; per day the higher count wins, so importing twice is harmless. */
+    suspend fun importAutoEnterStats(uri: Uri): String = withContext(Dispatchers.IO) {
+        runCatching {
+            val input = context.contentResolver.openInputStream(uri) ?: error("Couldn't open the file")
+            val (days, added) = manager.autoEnterStats.importFrom(input)
+            "Imported: $days day${if (days == 1) "" else "s"} updated, +$added Enters"
+        }.getOrElse { if (it is IllegalArgumentException) "That isn't an auto-enter stats file" else "Import failed: ${it.message}" }
+    }
 
     init {
         if (manager.tabs.value.isEmpty()) {

@@ -1,6 +1,16 @@
 package com.bori.app.ui.terminal
 
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.launch
+import java.time.LocalDate
 import android.util.TypedValue
 import android.view.KeyEvent
 import android.view.ViewGroup
@@ -120,6 +130,9 @@ fun TerminalKeyboard(
     autoEnter: Boolean?,
     onToggleAutoEnter: () -> Unit,
     autoEnterTotals: () -> String,
+    /** Saves / merges auto-enter's counts (the PC helper's EXPORT / IMPORT STATS file); returns a message. */
+    onExportStats: suspend (Uri) -> String,
+    onImportStats: suspend (Uri) -> String,
     onToggleCtrl: () -> Unit,
     onToggleAlt: () -> Unit,
     onToggleDirect: () -> Unit,
@@ -165,6 +178,8 @@ fun TerminalKeyboard(
             onDone = { done -> live = null; onSettings(done) },
             onPreviewVibration = keys::previewVibration,
             autoEnterTotals = autoEnterTotals,
+            onExportStats = onExportStats,
+            onImportStats = onImportStats,
             onDismiss = {
                 live?.let(onSettings)
                 live = null
@@ -292,8 +307,26 @@ private fun KeysSettingsSheet(
     onDone: (TerminalKeysSettings) -> Unit,
     onPreviewVibration: (Int) -> Unit,
     autoEnterTotals: () -> String,
+    onExportStats: suspend (Uri) -> String,
+    onImportStats: suspend (Uri) -> String,
     onDismiss: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // Bumped after an import so the totals line reads the new counts.
+    var statsVersion by remember { mutableIntStateOf(0) }
+    fun runStats(action: suspend () -> String) {
+        scope.launch {
+            Toast.makeText(context, action(), Toast.LENGTH_LONG).show()
+            statsVersion++
+        }
+    }
+    val exportStats = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri?.let { runStats { onExportStats(it) } }
+    }
+    val importStats = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { runStats { onImportStats(it) } }
+    }
     // Edits apply to the keys at once (behind the sheet) and are saved when a slider is let go.
     var s by remember { mutableStateOf(settings) }
     val update: (TerminalKeysSettings) -> Unit = { s = it; onChange(it) }
@@ -376,12 +409,19 @@ private fun KeysSettingsSheet(
                 }
             }
 
+            val totals = remember(statsVersion) { autoEnterTotals() }
             Text(
-                "Auto-enter: ${autoEnterTotals()}",
+                "Auto-enter: $totals",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 12.dp),
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { exportStats.launch("agy-stats-${LocalDate.now()}.json") }) { Text("Export stats") }
+                TextButton(onClick = { importStats.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }) {
+                    Text("Import stats")
+                }
+            }
         }
     }
 }

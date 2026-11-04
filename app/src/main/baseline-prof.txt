@@ -1,0 +1,27 @@
+# Baseline profile: code ART compiles ahead of time at install (profileinstaller applies it).
+# Hand-written: startup, the shell/workspace, the terminal and its keyboard. Wildcards:
+# ** matches any depth of packages/classes, the method part matches every method.
+
+# Startup and the app shell
+HSPLcom/bori/app/MainActivity;->**(**)**
+HSPLcom/bori/app/BoriApp;->**(**)**
+HSPLcom/bori/app/ui/NavHostKt;->**(**)**
+HSPLcom/bori/app/ui/adaptive/**;->**(**)**
+HSPLcom/bori/app/ui/workspace/**;->**(**)**
+HSPLcom/bori/app/ui/theme/**;->**(**)**
+Lcom/bori/app/ui/adaptive/**;
+Lcom/bori/app/ui/workspace/**;
+
+# Terminal: screen, keyboard bridge, sessions
+HSPLcom/bori/app/ui/terminal/**;->**(**)**
+HSPLcom/bori/app/terminal/**;->**(**)**
+HSPLcom/termux/terminal/**;->**(**)**
+HSPLcom/termux/view/**;->**(**)**
+Lcom/bori/app/ui/terminal/**;
+Lcom/bori/app/terminal/**;
+Lcom/termux/terminal/**;
+Lcom/termux/view/**;
+
+# Bori Keyboard: keys, typing session, suggestions, glide
+HSPLcom/bori/core/keyboard/**;->**(**)**
+Lcom/bori/core/keyboard/**;

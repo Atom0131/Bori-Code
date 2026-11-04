@@ -34,6 +34,9 @@ under `app/src/main/java/com/bori/app/`.
   underlines + Problems panel.
 - Symbol outline (Kotlin/Java extraction), find-in-files, quick-open, dependency view,
   XML layout preview.
+- **Add from phone** (Explorer header, or long-press a folder): copies pictures, videos or any
+  file into the project. The CLI agents see the projects folder in Linux, so this is how they get
+  screenshots and test media to look at. Pictures open in `ImagePreviewDialog.kt`, not as text.
 
 ## Projects & build — `ui/projects/`, `ui/build/`
 - `ProjectsScreen.kt`, `ProjectsViewModel.kt` — list / create / import projects;
@@ -79,6 +82,16 @@ under `app/src/main/java/com/bori/app/`.
   `TerminalKeyboard.kt`: Bori's compact terminal keyboard (suggestions, swipe typing, arrows by Enter,
   F1-F12, Del, split in two halves when 600dp or wider), used instead of the phone's unless the user switches with the globe key, which opens a
   typing box with the phone keyboard's own prediction. Suggestions and swipes: `terminal/WordPredictor.kt`.
+- **GitHub sign-in** (full flavor, Settings → Linux environment): one GitHub sign-in inside Linux that git,
+  gh, Claude Code and Antigravity all use (`GuestPolicy` writes `bori-github` and git's credential helper).
+  - **Browser sign-in, like VS Code / GitHub Desktop** (`ui/linux/GitHubAuth.kt`): GitHub's authorize page in
+    the browser (PKCE + state), which redirects to `bori-code://github-auth` (`GitHubAuthCallbackActivity`).
+    The token goes straight into gh on stdin (`DistroInstaller.signInGitHub` → `bori-github token`) and is
+    never stored by Bori Code. Needs a GitHub OAuth App: put `clientId` / `clientSecret` in the uncommitted
+    `github-oauth.properties` at the project root (callback URL `bori-code://github-auth`).
+  - **Code sign-in** (`gh auth login --web` in a terminal tab): "Use a code instead", and the only option in
+    builds without `github-oauth.properties`.
+  - Bori Code reads only the account name; the CLIs' file tools are denied gh's folder.
 
 ## Theme — `ui/theme/`
 - `Theme.kt`, `Color.kt`, `Type.kt` — **Obsidian Flux** design system: static

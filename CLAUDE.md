@@ -79,6 +79,12 @@ assets only when its inputs change.
 | fullRelease | `com.bori.code.full` | GitHub Releases APK, with Linux (versionName `-full`) |
 | fullDebug | `com.bori.code.debug` | **the dev build on the emulator and the Fold** |
 | playDebug | `com.bori.code.play.debug` | checking the Play build side by side |
+| fullFast | `com.bori.code.debug` | release code (R8, not debuggable) with the debug key: installs over fullDebug and keeps its data. For speed on a test phone (`:app:assembleFullFast`); reinstall fullDebug for `run-as` and the adb build receiver |
+
+Phone speed: `scripts/fold_perf_snapshot.sh` takes a read-only snapshot (memory, Linux programs, frames,
+temperature). `scripts/fold_tune.sh` asks before each step: full AOT compile (fast/release builds only),
+turning off the phantom-process killer, and background exemptions (`--undo` reverts).
+`app/src/main/baseline-prof.txt` lists the hot code that's compiled ahead of time at install.
 
 - IDs are set in `androidComponents.onVariants` (`app/build.gradle.kts`).
 - **No Linux code ships in Play.** `:core:linux` (with the Claude Code / Antigravity clients in

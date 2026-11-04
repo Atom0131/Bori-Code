@@ -37,6 +37,9 @@ data class DistroRow(
     val sizeBytes: Long?,
     /** Empty unless the distro is installed. */
     val clis: List<CliRow> = emptyList(),
+    /** The GitHub account signed in inside it; null when not signed in. Ignored while [githubChecked] is false. */
+    val githubLogin: String? = null,
+    val githubChecked: Boolean = false,
 )
 
 @HiltViewModel
@@ -45,7 +48,13 @@ class LinuxSetupViewModel @Inject constructor(
     private val proot: ProotLauncher,
     private val terminals: TerminalSessionManager,
     private val projectStateHolder: ProjectStateHolder,
+    private val githubAuth: GitHubAuth,
 ) : ViewModel() {
+
+    val githubAuthState: StateFlow<GitHubAuthState> = githubAuth.state
+
+    /** False without the OAuth App keys: the card offers only gh's code sign-in. */
+    val githubBrowserSignIn: Boolean get() = githubAuth.available
 
     val installState: StateFlow<InstallState> = installer.state
 
@@ -64,6 +73,14 @@ class LinuxSetupViewModel @Inject constructor(
                 val running = state is InstallState.Running
                 if (wasRunning && !running) refresh()
                 wasRunning = running
+            }
+        }
+        // Show the account once a browser sign-in has gone through to Linux.
+        viewModelScope.launch {
+            var wasFinishing = false
+            githubAuth.state.collect { state ->
+                if (wasFinishing && state !is GitHubAuthState.Finishing) refreshGitHub()
+                wasFinishing = state is GitHubAuthState.Finishing
             }
         }
     }
@@ -92,6 +109,18 @@ class LinuxSetupViewModel @Inject constructor(
                         r.copy(clis = r.clis.map { if (it.cli == cli) it.copy(version = version, checked = true) else it })
                     }
                 }
+                val login = installer.githubLogin(row.distro.id)
+                updateRow(row.distro.id) { it.copy(githubLogin = login, githubChecked = true) }
+            }
+        }
+    }
+
+    /** Re-reads the GitHub sign-in (after a sign-in tab); rows not checked yet are left to [refresh]. */
+    fun refreshGitHub() {
+        viewModelScope.launch {
+            _rows.value.filter { it.githubChecked }.forEach { row ->
+                val login = installer.githubLogin(row.distro.id)
+                updateRow(row.distro.id) { it.copy(githubLogin = login) }
             }
         }
     }
@@ -111,6 +140,23 @@ class LinuxSetupViewModel @Inject constructor(
     fun openCli(distroId: String, cli: CodingCli) {
         val projectDir = projectStateHolder.activeProject.value?.rootPath?.let(::File)
         terminals.open(ShellKind.Linux(distroId), hostCwd = projectDir, startCommand = cli.command, title = cli.title)
+    }
+
+    /** GitHub's approve page in the browser ([GitHubAuth]); it comes back to Bori Code by itself. */
+    fun signInGitHub(distroId: String, switchAccount: Boolean = false) = githubAuth.start(distroId, switchAccount)
+
+    /** Back on this screen while the approve page was still open: the user left it unfinished. */
+    fun cancelGitHubIfWaiting() = githubAuth.cancelIfWaiting()
+
+    fun dismissGitHubError() = githubAuth.dismiss()
+
+    /**
+     * Opens a Linux tab running GuestPolicy's `bori-github` script: gh's code sign-in, or
+     * sign-out when [signOut]. The status is re-read when the user comes back to this screen.
+     */
+    fun openGitHub(distroId: String, signOut: Boolean = false) {
+        val command = if (signOut) "bori-github logout" else "bori-github"
+        terminals.open(ShellKind.Linux(distroId), startCommand = command, title = "GitHub")
     }
 
     /** Terminal tabs open in [distroId]; they're closed before that distro is changed. */

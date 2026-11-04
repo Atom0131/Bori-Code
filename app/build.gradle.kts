@@ -16,6 +16,13 @@ val keystoreProperties = Properties().apply {
     if (keystorePropertiesFile.exists()) load(FileInputStream(keystorePropertiesFile))
 }
 
+// The GitHub OAuth App behind the full build's browser sign-in (never committed). Without it the
+// Linux screen falls back to gh's code sign-in. See docs/FEATURES.md → GitHub.
+val githubOAuthFile = rootProject.file("github-oauth.properties")
+val githubOAuth = Properties().apply {
+    if (githubOAuthFile.exists()) load(FileInputStream(githubOAuthFile))
+}
+
 android {
     namespace = "com.bori.app"
     compileSdk = 35
@@ -54,6 +61,15 @@ android {
         debug {
             versionNameSuffix   = "-debug"
         }
+        // Release code (R8, not debuggable, so ART runs AOT code) under the debug app ID and key:
+        // it installs over fullDebug and keeps Linux, sign-ins and settings. For daily use on a
+        // test phone; reinstall fullDebug for run-as and the adb build receiver.
+        create("fast") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            versionNameSuffix = "-fast"
+            matchingFallbacks += "release"
+        }
     }
 
     // Two distributions. Play can't take the Linux environment (it downloads and runs native code
@@ -68,6 +84,8 @@ android {
         create("full") {
             dimension = "dist"
             versionNameSuffix = "-full"
+            buildConfigField("String", "GITHUB_CLIENT_ID", "\"${githubOAuth.getProperty("clientId", "")}\"")
+            buildConfigField("String", "GITHUB_CLIENT_SECRET", "\"${githubOAuth.getProperty("clientSecret", "")}\"")
         }
     }
 
@@ -83,6 +101,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
@@ -113,6 +132,7 @@ android {
 // Exact app IDs, since flavor and build-type suffixes would stack:
 //   playRelease com.bori.code (Play)   fullRelease com.bori.code.full (GitHub)
 //   fullDebug   com.bori.code.debug (the dev build on test devices)   playDebug com.bori.code.play.debug
+//   fullFast    com.bori.code.debug (release code, debug key; installs over fullDebug)
 androidComponents {
     onVariants { variant ->
         val base = "com.bori.code"
@@ -121,6 +141,7 @@ androidComponents {
                 "playRelease" -> base
                 "fullRelease" -> "$base.full"
                 "fullDebug"   -> "$base.debug"
+                "fullFast"    -> "$base.debug"
                 "playDebug"   -> "$base.play.debug"
                 else -> return@onVariants // a new flavor/build type keeps AGP's default ID
             }
@@ -169,6 +190,8 @@ dependencies {
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.material3.adaptive)
     implementation(libs.androidx.window)
+    // Applies baseline-prof.txt at install, so the hot paths are AOT-compiled from the first launch.
+    implementation(libs.androidx.profileinstaller)
 
     implementation(libs.hilt.android)
     implementation(libs.hilt.navigation.compose)
@@ -188,6 +211,8 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
 
     testImplementation(libs.junit)
+    // The real org.json for JVM unit tests (android.jar only has stubs that throw).
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

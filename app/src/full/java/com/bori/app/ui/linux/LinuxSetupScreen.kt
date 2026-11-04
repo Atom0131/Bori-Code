@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bori.core.linux.CodingCli
 import com.bori.core.linux.DistroStatus
@@ -68,7 +69,15 @@ fun LinuxSetupScreen(
     val state by viewModel.installState.collectAsStateWithLifecycle()
     var confirm by remember { mutableStateOf<PendingAction?>(null) }
     var confirmCliRemoval by remember { mutableStateOf<PendingCliRemoval?>(null) }
+    val githubAuth by viewModel.githubAuthState.collectAsStateWithLifecycle()
     val busy = state is InstallState.Running
+    // Back from a GitHub sign-in tab or the browser: show the new account. Back from the browser
+    // without GitHub's redirect means the approve page was left unfinished.
+    LifecycleResumeEffect(Unit) {
+        viewModel.cancelGitHubIfWaiting()
+        viewModel.refreshGitHub()
+        onPauseOrDispose {}
+    }
 
     Scaffold(
 
@@ -191,6 +200,22 @@ fun LinuxSetupScreen(
                                     onDismiss = viewModel::dismissResult,
                                 )
                             }
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                            GitHubSection(
+                                row = row,
+                                auth = githubAuth,
+                                browserSignIn = viewModel.githubBrowserSignIn,
+                                onSignIn = { switchAccount -> viewModel.signInGitHub(d.id, switchAccount) },
+                                onUseCode = {
+                                    viewModel.openGitHub(d.id)
+                                    onOpenTerminal()
+                                },
+                                onDismissError = viewModel::dismissGitHubError,
+                                onSignOut = {
+                                    viewModel.openGitHub(d.id, signOut = true)
+                                    onOpenTerminal()
+                                },
+                            )
                         }
                     }
                 }
@@ -235,6 +260,64 @@ fun LinuxSetupScreen(
             },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
         )
+    }
+}
+
+/** One GitHub sign-in inside the distro, shared by git, gh and both coding CLIs. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun GitHubSection(
+    row: DistroRow,
+    auth: GitHubAuthState,
+    browserSignIn: Boolean,
+    onSignIn: (switchAccount: Boolean) -> Unit,
+    onUseCode: () -> Unit,
+    onDismissError: () -> Unit,
+    onSignOut: () -> Unit,
+) {
+    val login = row.githubLogin
+    val working = when (auth) {
+        is GitHubAuthState.Waiting -> auth.distroId == row.distro.id
+        is GitHubAuthState.Finishing -> auth.distroId == row.distro.id
+        else -> false
+    }
+    val error = (auth as? GitHubAuthState.Failed)?.takeIf { it.distroId == row.distro.id }?.message
+    // Without the OAuth App keys (forks, CI builds) the buttons run gh's code sign-in.
+    val signIn: (Boolean) -> Unit = if (browserSignIn) onSignIn else { _ -> onUseCode() }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("GitHub", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "One sign-in for Claude Code, Antigravity and git in the terminal, so they can clone, push and create your repos. " +
+                "Your GitHub login stays inside Linux.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            when {
+                auth is GitHubAuthState.Waiting && working -> "Waiting for GitHub… approve Bori Code in your browser."
+                auth is GitHubAuthState.Finishing && working -> "Finishing the sign-in…"
+                !row.githubChecked -> "Checking…"
+                login != null -> "Signed in as $login"
+                else -> "Not signed in"
+            },
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (error != null) {
+            Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        if (row.githubChecked && !working) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (login == null) {
+                    Button(onClick = { onDismissError(); signIn(false) }) { Text("Sign in to GitHub") }
+                } else {
+                    OutlinedButton(onClick = { onDismissError(); signIn(true) }) { Text("Switch account") }
+                    OutlinedButton(onClick = onSignOut) { Text("Sign out") }
+                }
+                if (browserSignIn) {
+                    TextButton(onClick = { onDismissError(); onUseCode() }) { Text("Use a code instead") }
+                }
+            }
+        }
     }
 }
 

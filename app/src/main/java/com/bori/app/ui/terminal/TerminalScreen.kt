@@ -439,6 +439,8 @@ fun TerminalScreen(
                     val t = viewModel.autoEnterTotals()
                     "${t.today} Enters today, ${t.week} this week, ${t.month} this month, ${t.all} in all"
                 },
+                onExportStats = viewModel::exportAutoEnterStats,
+                onImportStats = viewModel::importAutoEnterStats,
                 onToggleCtrl = viewModel::toggleCtrl,
                 onToggleAlt = viewModel::toggleAlt,
                 onToggleDirect = { direct = !direct },
@@ -656,14 +658,27 @@ private fun TerminalPane(
         }
     }
 
-    // Redraw when this pane's session prints.
+    // Redraw when this pane's session prints: at most once a frame, and not while the pane is hidden or the
+    // app is in the background (coming back into view redraws, below). Agents print all the time.
     val manager = viewModel.sessionManager
+    val shown = rememberUpdatedState(visible)
     DisposableEffect(view) {
         val v = view
-        val remove = manager.addScreenListener { session: TerminalSession ->
-            if (v != null && v.currentSession === session) v.onScreenUpdated()
+        var queued = false
+        val redraw = Runnable {
+            queued = false
+            if (shown.value && manager.inView) v?.onScreenUpdated()
         }
-        onDispose { remove() }
+        val remove = manager.addScreenListener { session: TerminalSession ->
+            if (v != null && v.currentSession === session && !queued && shown.value && manager.inView) {
+                queued = true
+                v.postOnAnimation(redraw)
+            }
+        }
+        onDispose {
+            remove()
+            v?.removeCallbacks(redraw)
+        }
     }
     // The focused pane takes the keyboard; a hidden one lets go of it. Coming back into view
     // (a fold, a tab switch) redraws at once instead of waiting for the next output.
@@ -675,6 +690,11 @@ private fun TerminalPane(
         }
         v.onScreenUpdated()
         if (focused) v.requestFocus()
+    }
+    // Output that came while the app was in the background wasn't drawn.
+    LifecycleResumeEffect(view) {
+        view?.onScreenUpdated()
+        onPauseOrDispose { }
     }
 }
 

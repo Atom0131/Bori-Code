@@ -184,8 +184,41 @@ class TerminalSessionManager @Inject constructor(
             StatusNotifier.Agent(tab.agent!!, agentStates[tab.id], enters[tab.id]?.enters)
         }
         StatusNotifier.terminalTabs = tabs.size
+        updateWake()
         StatusNotifier.refresh(context)
     }
+
+    /** When each session last printed; an agent that has printed nothing for a long time isn't working. */
+    private val lastOutput = HashMap<TerminalSession, Long>()
+
+    /**
+     * Keeps the CPU awake while an agent works, or waits on a prompt auto-enter will answer. Not while it
+     * waits for the user, and not once it has printed nothing for [WAKE_QUIET_MS] (a hook that never
+     * reported "done" can't hold the phone awake). Checked again every [WAKE_CHECK_MS] while held.
+     */
+    private fun updateWake() {
+        val now = System.currentTimeMillis()
+        val needed = _tabs.value.any { tab ->
+            if (tab.finished) return@any false
+            val busy = when (agentStates[tab.id]) {
+                AgentState.WORKING -> true
+                AgentState.WAITING -> tab.id in autoEnters
+                else -> false
+            }
+            busy && now - (lastOutput[tab.session] ?: 0L) < WAKE_QUIET_MS
+        }
+        if (needed == TerminalService.awake && !needed) return
+        if (needed != TerminalService.awake) {
+            Log.i(TAG, if (needed) "Keeping the CPU awake for a working agent" else "Agent wake lock released")
+        }
+        // Called again while held, so the lock's cap keeps getting pushed back.
+        TerminalService.keepAwake(context, needed)
+        main.removeCallbacks(wakeCheck)
+        if (needed) main.postDelayed(wakeCheck, WAKE_CHECK_MS)
+    }
+
+    /** publish() runs updateWake() and refreshes the notification line. */
+    private val wakeCheck = Runnable { publish() }
 
     private fun ensureTicking() {
         main.removeCallbacks(tick)
@@ -212,6 +245,9 @@ class TerminalSessionManager @Inject constructor(
             if (auto.check(now)) {
                 autoEnterStats.add()
                 _autoEnter.update { m -> m[id]?.let { m + (id to it.copy(enters = it.enters + 1, lastReason = auto.lastReason)) } ?: m }
+                publish()
+            } else if (auto.takeStuck()) {
+                _autoEnter.update { m -> m[id]?.let { m + (id to it.copy(lastReason = auto.lastReason)) } ?: m }
                 publish()
             } else if (auto.idle(now)) {
                 setAutoEnter(id, false)
@@ -325,6 +361,7 @@ class TerminalSessionManager @Inject constructor(
         }
         agentStates.remove(id)
         agyChecked.remove(id)
+        lastOutput.remove(tab.session)
         publish()
         if (remaining.isEmpty()) TerminalService.stop(context)
     }
@@ -339,6 +376,7 @@ class TerminalSessionManager @Inject constructor(
         _layout.update { it.copy(slots = List(it.split.panes) { null }, focused = 0) }
         agentStates.clear()
         agyChecked.clear()
+        lastOutput.clear()
         publish()
         TerminalService.stop(context)
     }
@@ -375,6 +413,7 @@ class TerminalSessionManager @Inject constructor(
 
     private val client = object : TerminalSessionClient {
         override fun onTextChanged(changedSession: TerminalSession) {
+            lastOutput[changedSession] = System.currentTimeMillis()
             screenListeners.forEach { it(changedSession) }
             scheduleAutoEnterCheck()
         }
@@ -426,5 +465,7 @@ class TerminalSessionManager @Inject constructor(
         const val TRANSCRIPT_ROWS = 4000
         const val TICK_MS = 1_000L
         const val SETTLE_MS = 300L
+        const val WAKE_QUIET_MS = 15 * 60_000L
+        const val WAKE_CHECK_MS = 60_000L
     }
 }

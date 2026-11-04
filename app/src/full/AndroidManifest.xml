@@ -8,5 +8,21 @@
             android:name="com.bori.app.service.LinuxInstallService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- GitHub's sign-in sends the browser back here (see ui/linux/GitHubAuth.kt) -->
+        <activity
+            android:name="com.bori.app.ui.linux.GitHubAuthCallbackActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="bori-code" android:host="github-auth" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

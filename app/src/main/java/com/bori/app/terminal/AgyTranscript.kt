@@ -20,11 +20,37 @@ object AgyTranscript {
     /** Where the turn is: a tool waiting, a question or plan for the user, or finished. */
     class Turn(val pending: Pending?, val asksUser: Boolean, val complete: Boolean)
 
-    /** The newest transcript under [home] (the guest's /root on the host). */
-    fun latest(home: File): File? = File(home, ".gemini/antigravity-cli/brain").listFiles()
-        ?.map { File(it, ".system_generated/logs/transcript.jsonl") }
-        ?.filter { it.isFile }
-        ?.maxByOrNull { it.lastModified() }
+    /**
+     * The newest transcript under [home] (the guest's /root on the host). With [since], transcripts last
+     * written before then are skipped, so an older agy session can't be taken for this one.
+     */
+    fun latest(home: File, since: Long? = null): File? = find(home)
+        .filter { since == null || it.lastModified() >= since }
+        .maxByOrNull { it.lastModified() }
+
+    private const val WALK_CACHE_MS = 30_000L
+    private const val WALK_DEPTH = 6
+    private var walkedAt = 0L
+    private var walked: List<File> = emptyList()
+
+    /** The known layout first; if agy moves its logs, a bounded walk (cached for 30 s) finds them. */
+    private fun find(home: File): List<File> {
+        val root = File(home, ".gemini/antigravity-cli")
+        val known = File(root, "brain").listFiles()
+            ?.map { File(it, ".system_generated/logs/transcript.jsonl") }
+            ?.filter { it.isFile }
+            .orEmpty()
+        if (known.isNotEmpty()) return known
+        val now = System.currentTimeMillis()
+        synchronized(this) {
+            if (now - walkedAt < WALK_CACHE_MS) return walked
+            walked = root.walkTopDown().maxDepth(WALK_DEPTH)
+                .filter { it.name == "transcript.jsonl" && it.isFile }
+                .toList()
+            walkedAt = now
+            return walked
+        }
+    }
 
     fun read(file: File): Turn? {
         val steps = runCatching { tail(file) }.getOrNull()
