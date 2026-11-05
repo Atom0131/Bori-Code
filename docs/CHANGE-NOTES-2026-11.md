@@ -6,6 +6,22 @@ GPL code.
 
 ---
 
+## 4.4.1 (November 4): GitHub sign-in that works
+
+**GitHub sign-in in the terminal now goes through.** It used to stop at gh's "Press Enter to open
+github.com in your browser": Bori Code's ↵ key sends a carriage return, which never ended gh's line, so
+the page never opened (Ctrl+J, a real newline, did open it). `bori-github` now runs gh without a
+terminal on stdin, so it doesn't wait, and opens github.com/login/device itself through the xdg-open
+bridge. The tab starts with plain steps, and says that the GitHub mobile app isn't part of this sign-in.
+
+**Linux can copy to Android's clipboard.** New `termux-clipboard-set` shim (plus an empty
+`termux-clipboard-get`, which gh's clipboard library also requires) hands text to Bori Code through the
+handoff folder (`ProotShells.onClipboard`). gh's one-time code is copied automatically, with a toast
+"GitHub code XXXX-XXXX copied". Tested on the Galaxy Z Fold: the page opened by itself, the code was
+pasted, and the account signed in.
+
+---
+
 ## 4.4.0 (November 4): agents keep working, auto-enter from script 6, speed
 
 **Agents no longer stall when the screen goes off.** Terminal agents had no wake lock, so with the

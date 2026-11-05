@@ -34,6 +34,7 @@ class GuestPolicy @Inject constructor(
         runCatching { writeClaudePolicy(rootfs) }.onFailure { Log.w(TAG, "Claude policy", it) }
         runCatching { mergeAntigravitySettings(rootfs) }.onFailure { Log.w(TAG, "Antigravity settings", it) }
         runCatching { writeBrowserShim(rootfs) }.onFailure { Log.w(TAG, "xdg-open shim", it) }
+        runCatching { writeClipboardShim(rootfs) }.onFailure { Log.w(TAG, "Clipboard shim", it) }
         runCatching { writeStatusScript(rootfs) }.onFailure { Log.w(TAG, "Status script", it) }
         runCatching { writeBenchScript(rootfs) }.onFailure { Log.w(TAG, "Bench script", it) }
         runCatching { writeProjectRules(rootfs) }.onFailure { Log.w(TAG, "Project rules", it) }
@@ -100,8 +101,19 @@ class GuestPolicy @Inject constructor(
             |  # Bori Code's browser sign-in pipes the token in on stdin; it's never on the command line.
             |  gh auth login --hostname github.com --git-protocol https --with-token || exit 1
             |else
-            |  echo "GitHub shows a one-time code below. Press Enter to open the sign-in page in your browser, then type the code there."
-            |  gh auth login --hostname github.com --git-protocol https --web --scopes repo,workflow,read:org,gist || exit 1
+            |  # Normal line mode, so Enter (a carriage return from Bori Code's keys) ends a line for gh.
+            |  stty sane 2>/dev/null
+            |  echo "Signing in to GitHub:"
+            |  echo " 1. Your browser opens github.com/login/device, and your one-time code (below) is copied."
+            |  echo " 2. Paste the code there (sign in to GitHub first if it asks), tap Continue, then Authorize."
+            |  echo " 3. Come back here; it finishes by itself."
+            |  echo "The GitHub app isn't used for this. If no browser opens, go to github.com/login/device and type the code."
+            |  echo
+            |  # Without a terminal on stdin gh doesn't stop at "Press Enter" (a carriage return from Bori
+            |  # Code's keys never ended its line) but it doesn't open the page either, so open it here once
+            |  # gh has had time to show the code.
+            |  ( sleep 4; xdg-open https://github.com/login/device ) &
+            |  gh auth login --hostname github.com --git-protocol https --web --scopes repo,workflow,read:org,gist </dev/null || exit 1
             |fi
             |set -- ${'$'}(gh api user --jq '.login + " " + (.id | tostring)' 2>/dev/null)
             |if [ -n "${'$'}1" ]; then
@@ -325,6 +337,31 @@ class GuestPolicy @Inject constructor(
             |""".trimMargin(),
         )
         shim.setExecutable(true, false)
+    }
+
+    /**
+     * `termux-clipboard-set` inside the guest (what gh's clipboard library and many CLIs look for
+     * when there's no X or Wayland) hands the text to Bori Code, which puts it on Android's
+     * clipboard. Takes the text as arguments or on stdin, like Termux's.
+     */
+    private fun writeClipboardShim(rootfs: File) {
+        val shim = File(rootfs, "usr/local/bin/termux-clipboard-set")
+        shim.parentFile?.mkdirs()
+        val dir = ProotLauncher.GUEST_HANDOFF
+        shim.writeText(
+            """
+            |#!/bin/sh
+            |# Written by Bori Code: puts the text on Android's clipboard.
+            |if [ ${'$'}# -gt 0 ]; then printf '%s' "${'$'}*" > $dir/clipboard.tmp; else head -c 65536 > $dir/clipboard.tmp; fi
+            |mv $dir/clipboard.tmp $dir/clipboard
+            |""".trimMargin(),
+        )
+        shim.setExecutable(true, false)
+        // gh's clipboard library only uses the set command when the get command exists too. Reading
+        // Android's clipboard from Linux isn't offered, so this prints nothing.
+        val get = File(rootfs, "usr/local/bin/termux-clipboard-get")
+        get.writeText("#!/bin/sh\n# Written by Bori Code: Linux can copy to Android's clipboard but not read it.\nexit 0\n")
+        get.setExecutable(true, false)
     }
 
     /**

@@ -1,5 +1,7 @@
 package com.bori.app.terminal
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -7,6 +9,7 @@ import android.os.FileObserver
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.widget.Toast
 import com.bori.core.linux.CodingCli
 import com.bori.core.linux.GuestPolicy
 import com.bori.core.linux.ProotLauncher
@@ -69,6 +72,40 @@ class ProotShells @Inject constructor(
         mainHandler.post { agentListener?.invoke(tabId, state, json) }
     }
 
+    /** Text from the guest's `termux-clipboard-set` shim: onto Android's clipboard, with a toast. */
+    private fun onClipboard() {
+        val file = File(proot.handoffDir, CLIPBOARD_FILE)
+        val text = runCatching {
+            file.inputStream().use { input -> String(input.readNBytesCompat(MAX_CLIP_BYTES), Charsets.UTF_8) }
+        }.getOrNull()
+        file.delete()
+        if (text.isNullOrEmpty()) return
+        val oneLine = text.trim().replace(Regex("\\s+"), " ")
+        val message = if (GITHUB_CODE.matches(oneLine)) {
+            "GitHub code $oneLine copied. Paste it on the GitHub page."
+        } else {
+            "Copied from Linux: " + if (oneLine.length > 40) oneLine.take(40) + "…" else oneLine
+        }
+        mainHandler.post {
+            runCatching {
+                val clipboard = context.getSystemService(ClipboardManager::class.java)
+                clipboard.setPrimaryClip(ClipData.newPlainText("Linux", text))
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            }.onFailure { Log.w(TAG, "Clipboard from guest", it) }
+        }
+    }
+
+    private fun java.io.InputStream.readNBytesCompat(max: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        while (out.size() < max) {
+            val n = read(buf, 0, minOf(buf.size, max - out.size()))
+            if (n < 0) break
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
+
     /**
      * Opens URLs the guest's xdg-open shim drops in the handoff folder (CLI sign-in pages), in
      * Android's browser. Held in a field: a FileObserver stops when it's garbage collected.
@@ -79,6 +116,7 @@ class ProotShells @Inject constructor(
     ) {
         override fun onEvent(event: Int, path: String?) {
             if (path != null && path.endsWith(".state")) return onAgentState(path)
+            if (path == CLIPBOARD_FILE) return onClipboard()
             if (path != HANDOFF_FILE) return
             val file = File(proot.handoffDir, HANDOFF_FILE)
             val url = runCatching { file.readText().trim() }.getOrNull()
@@ -100,6 +138,10 @@ class ProotShells @Inject constructor(
     private companion object {
         const val TAG = "Terminal"
         const val HANDOFF_FILE = "open-url"
+        const val CLIPBOARD_FILE = "clipboard"
+        const val MAX_CLIP_BYTES = 65536
+        /** gh's one-time device code, e.g. B730-F1A9. */
+        val GITHUB_CODE = Regex("[A-Z0-9]{4}-[A-Z0-9]{4}")
         val AGENT_STATE = Regex("agent-(\\d+)\\.state")
     }
 }
