@@ -164,6 +164,14 @@ class ProjectsViewModel @Inject constructor(
         _importState.value = ImportState.Idle
     }
 
+    // The project whose file explorer is showing on the Projects tab (the Code tab can open it too).
+    private val _filesProject = kotlinx.coroutines.flow.MutableStateFlow<Project?>(null)
+    val filesProject: kotlinx.coroutines.flow.StateFlow<Project?> = _filesProject
+
+    fun showFiles(project: Project?) {
+        _filesProject.value = project
+    }
+
     fun openProject(project: Project) {
         projectStateHolder.setActiveProject(project)
     }

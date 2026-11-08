@@ -2,4 +2,6 @@
 <paths>
     <!-- Shares APKs built into context.filesDir/builds/ -->
     <files-path name="builds" path="builds/" />
+    <!-- Project files opened or shared from the file explorer (getExternalFilesDir/Bori) -->
+    <external-files-path name="projects" path="Bori/" />
 </paths>

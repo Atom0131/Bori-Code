@@ -38,7 +38,14 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
@@ -128,6 +135,7 @@ fun EditorScreen(
     onOpenTerminal: () -> Unit = {},
     onOpenGit: () -> Unit = {},
     onNavigateToChat: () -> Unit = {},
+    onOpenProjectFiles: () -> Unit = {},
     viewModel: EditorViewModel = hiltViewModel(),
     buildViewModel: BuildViewModel = hiltViewModel(),
     chatViewModel: ChatViewModel = hiltViewModel(),
@@ -407,6 +415,12 @@ fun EditorScreen(
     val visible = LocalPaneVisible.current
     LaunchedEffect(activeEngine, visible) { if (!visible) activeEngine?.view?.clearFocus() }
     var overflowMenu by remember { mutableStateOf(false) }
+    var projectMenu by remember { mutableStateOf(false) }
+    // Full screen, like the Terminal's: hides the phone's bars and the app's tabs. Back leaves it.
+    var fullScreen by com.bori.app.ui.adaptive.LocalAppChrome.current.fullScreen
+    com.bori.app.ui.terminal.FullScreenEffect(fullScreen && visible)
+    BackHandler(enabled = fullScreen && visible) { fullScreen = false }
+    LaunchedEffect(visible) { if (!visible) fullScreen = false }
     val otherAgentLock by chatViewModel.otherAgentLock.collectAsState()
     val branch by viewModel.currentBranch.collectAsStateWithLifecycle()
     com.bori.app.ui.common.PollAgentLock(activeProject?.rootPath) {
@@ -435,11 +449,56 @@ fun EditorScreen(
             Column {
             TopAppBar(
                 title = {
-                    Text(
-                        text = activeProject?.name?.let { name -> branch?.let { "$name · $it" } ?: name } ?: "Editor",
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                    )
+                    Box {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { projectMenu = true }
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                text = activeProject?.name?.let { name -> branch?.let { "$name · $it" } ?: name } ?: "Editor",
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = "Switch project")
+                        }
+                        DropdownMenu(expanded = projectMenu, onDismissRequest = { projectMenu = false }) {
+                            allProjects.forEach { project ->
+                                DropdownMenuItem(
+                                    text = { Text(project.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                    leadingIcon = { Icon(Icons.Default.Folder, null) },
+                                    trailingIcon = {
+                                        if (project.id == activeProject?.id) Icon(Icons.Default.Check, contentDescription = "Open now")
+                                    },
+                                    onClick = {
+                                        projectMenu = false
+                                        if (project.id != activeProject?.id) viewModel.switchProject(project)
+                                    },
+                                )
+                            }
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("Files…") },
+                                leadingIcon = { Icon(Icons.Default.FolderOpen, null) },
+                                onClick = {
+                                    projectMenu = false
+                                    activeProject?.let {
+                                        projectsViewModel.showFiles(it)
+                                        onOpenProjectFiles()
+                                    }
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("New project") },
+                                leadingIcon = { Icon(Icons.Default.Add, null) },
+                                onClick = { projectMenu = false; showNewProjectDialog = true },
+                            )
+                        }
+                    }
                 },
                 actions = {
                     val findInFiles = {
@@ -502,6 +561,12 @@ fun EditorScreen(
                         enabled = tabState.activeTab != null,
                     ) {
                         Icon(Icons.Default.Save, contentDescription = "Save file")
+                    }
+                    IconButton(onClick = { fullScreen = !fullScreen }) {
+                        Icon(
+                            if (fullScreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                            contentDescription = if (fullScreen) "Exit full screen" else "Full screen",
+                        )
                     }
                     if (narrow) {
                         Box {
@@ -611,12 +676,28 @@ fun EditorScreen(
                                             )
                                         }
                                         IconButton(
+                                            onClick = {
+                                                projectsViewModel.activeProject.value?.let {
+                                                    projectsViewModel.showFiles(it)
+                                                    onOpenProjectFiles()
+                                                }
+                                            },
+                                            modifier = Modifier.size(32.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Default.FolderOpen,
+                                                contentDescription = "Files",
+                                                modifier = Modifier.size(18.dp),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                        IconButton(
                                             onClick = { addFromPhone(viewModel.rootNode()) },
                                             modifier = Modifier.size(32.dp),
                                         ) {
                                             Icon(
-                                                Icons.Default.AddPhotoAlternate,
-                                                contentDescription = "Add from phone",
+                                                Icons.Default.UploadFile,
+                                                contentDescription = "Add files from phone",
                                                 modifier = Modifier.size(18.dp),
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                             )
@@ -704,8 +785,8 @@ fun EditorScreen(
                                                         onClick = { inputDialogValue = ""; contextMenuAction = ContextMenuAction.NEW_FOLDER },
                                                     )
                                                     DropdownMenuItem(
-                                                        text = { Text("Add from phone") },
-                                                        leadingIcon = { Icon(Icons.Default.AddPhotoAlternate, null) },
+                                                        text = { Text("Add files from phone") },
+                                                        leadingIcon = { Icon(Icons.Default.UploadFile, null) },
                                                         onClick = { contextMenuNode = null; addFromPhone(node) },
                                                     )
                                                 }

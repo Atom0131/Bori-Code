@@ -784,7 +784,7 @@ private fun SessionChips(
 
 /** Hides Android's status and navigation bars while [fullScreen]; a swipe shows them briefly. */
 @Composable
-private fun FullScreenEffect(fullScreen: Boolean) {
+internal fun FullScreenEffect(fullScreen: Boolean) {
     val view = LocalView.current
     DisposableEffect(fullScreen) {
         val window = view.context.findActivity()?.window

@@ -68,6 +68,9 @@ import com.bori.core.project.model.Project
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.material.icons.filled.FolderOpen
+import com.bori.app.ui.editor.EditorViewModel
+import com.bori.app.ui.editor.FileNode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,6 +79,7 @@ fun ProjectsScreen(
     onViewLogs: () -> Unit = {},
     viewModel: ProjectsViewModel = hiltViewModel(),
     buildViewModel: BuildViewModel = hiltViewModel(),
+    editorViewModel: EditorViewModel = hiltViewModel(),
 ) {
     val projects by viewModel.projects.collectAsState()
     val activeProject by viewModel.activeProject.collectAsState()
@@ -89,6 +93,21 @@ fun ProjectsScreen(
     var projectToBuild by remember { mutableStateOf<Project?>(null) }
     var showBuildSheet by remember { mutableStateOf(false) }
     var showNewProjectDialog by remember { mutableStateOf(false) }
+    val filesProject by viewModel.filesProject.collectAsState()
+
+    filesProject?.let { project ->
+        ProjectFilesScreen(
+            root = java.io.File(project.rootPath),
+            title = project.name,
+            onOpenInEditor = { file ->
+                viewModel.openProject(project)
+                editorViewModel.openFile(FileNode(file.name, file.absolutePath, isDirectory = false))
+                onOpenProject(project)
+            },
+            onDismiss = { viewModel.showFiles(null) },
+        )
+        return
+    }
 
     val zipPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -274,6 +293,7 @@ fun ProjectsScreen(
                             onOpenProject(project)
                         },
                         onBuild = { projectToBuild = project },
+                        onFiles = { viewModel.showFiles(project) },
                         onDelete = { projectToDelete = project },
                     )
                 }
@@ -288,6 +308,7 @@ private fun ProjectCard(
     isActive: Boolean,
     onClick: () -> Unit,
     onBuild: () -> Unit,
+    onFiles: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val dateStr = remember(project.createdAt) {
@@ -356,6 +377,13 @@ private fun ProjectCard(
                     text = dateStr,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onFiles) {
+                Icon(
+                    imageVector = Icons.Default.FolderOpen,
+                    contentDescription = "Files",
+                    tint = MaterialTheme.colorScheme.primary,
                 )
             }
             IconButton(onClick = onBuild) {

@@ -3,7 +3,7 @@
 import android.app.Application
 import android.net.Uri
 import android.os.Environment
-import android.provider.OpenableColumns
+import com.bori.app.ui.projects.ProjectFileOps
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.bori.app.data.build.DiagnosticsStateHolder
@@ -266,7 +266,7 @@ class EditorViewModel @Inject constructor(
     }
 
     /** Rebuilds the tree from disk, reloading the folders the user has open (parents first). */
-    private fun reloadTreeKeepingExpanded() {
+    fun reloadTreeKeepingExpanded() {
         viewModelScope.launch(Dispatchers.IO) {
             var tree = buildTree(projectRoot)
             for (path in _expandedPaths.value.sortedBy { it.length }) {
@@ -400,47 +400,15 @@ class EditorViewModel @Inject constructor(
      */
     fun importFiles(parent: FileNode, uris: List<Uri>) {
         if (uris.isEmpty()) return
-        val resolver = getApplication<Application>().contentResolver
         viewModelScope.launch(Dispatchers.IO) {
-            val dir = File(parent.path).apply { mkdirs() }
-            var added = 0
-            for (uri in uris) {
-                runCatching {
-                    val target = freeName(dir, displayName(uri))
-                    resolver.openInputStream(uri)!!.use { input ->
-                        target.outputStream().use { input.copyTo(it) }
-                    }
-                    added++
-                }.onFailure {
-                    _events.emit(EditorUiEvent.ShowError("Couldn't add a file: ${it.message}"))
-                }
-            }
+            val (added, errors) = ProjectFileOps.importInto(getApplication(), File(parent.path), uris)
+            errors.forEach { _events.emit(EditorUiEvent.ShowError("Couldn't add a file: $it")) }
             reloadShowing(parent)
-            if (added > 0) {
-                val what = if (added == 1) "1 file" else "$added files"
+            if (added.isNotEmpty()) {
+                val what = if (added.size == 1) added[0] else "${added.size} files"
                 _events.emit(EditorUiEvent.ShowError("Added $what to ${parent.name}"))
             }
         }
-    }
-
-    private fun displayName(uri: Uri): String {
-        val resolver = getApplication<Application>().contentResolver
-        val name = runCatching {
-            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-                if (it.moveToFirst()) it.getString(0) else null
-            }
-        }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/')
-        return name?.replace('/', '_')?.takeIf { it.isNotBlank() } ?: "file"
-    }
-
-    /** [name] in [dir], or "name (2).ext", "name (3).ext"… when it's taken. */
-    private fun freeName(dir: File, name: String): File {
-        var file = File(dir, name)
-        val base = name.substringBeforeLast('.')
-        val ext = name.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" }
-        var n = 2
-        while (file.exists()) file = File(dir, "$base (${n++})$ext")
-        return file
     }
 
     /** Reloads the tree keeping open folders, and opens [parent] so a new item in it shows. */
@@ -563,6 +531,39 @@ class EditorViewModel @Inject constructor(
 
     fun selectProject(project: Project) {
         projectStateHolder.setActiveProject(project)
+    }
+
+    // Open files remembered per project root, so switching back brings your tabs back.
+    private val tabsByProject = mutableMapOf<String, List<String>>()
+
+    /**
+     * Switches the editor to [project]: the old project's saved tabs close (and are remembered),
+     * tabs with unsaved changes stay open so nothing is lost, and the new project's tabs reopen.
+     */
+    fun switchProject(project: Project) {
+        val old = projectStateHolder.activeProject.value
+        if (old?.id == project.id) return
+        val oldRoot = old?.rootPath?.takeIf { it.isNotBlank() }
+        if (oldRoot != null) {
+            val tabs = editorController.tabState.value.tabs
+            val prefix = oldRoot.trimEnd('/') + "/"
+            tabsByProject[oldRoot] = tabs.filter { it.path.startsWith(prefix) }.map { it.path }
+            for (i in tabs.indices.reversed()) {
+                val tab = tabs[i]
+                if (tab.path.startsWith(prefix) && !tab.isDirty) editorController.closeTab(i)
+            }
+        }
+        projectStateHolder.setActiveProject(project)
+        val reopen = tabsByProject[project.rootPath].orEmpty()
+        if (reopen.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            for (path in reopen) {
+                val file = File(path)
+                if (!file.isFile) continue
+                val content = runCatching { file.readText() }.getOrNull() ?: continue
+                withContext(Dispatchers.Main) { editorController.openFile(getApplication(), path, content) }
+            }
+        }
     }
 
     /** Walks up from [startDir] to find a project root (has settings.gradle) and sets it active. */

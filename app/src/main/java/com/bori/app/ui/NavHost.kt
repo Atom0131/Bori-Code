@@ -332,6 +332,7 @@ fun BoriNavHost(
                 onOpenTerminal = { onTab("terminal") },
                 onOpenGit = { navController.navigate("git") },
                 onNavigateToChat = { onTab("chat") },
+                onOpenProjectFiles = { onTab("projects") },
             )
         }
     }
