@@ -52,6 +52,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Builds run in their own process: an out-of-memory build can't crash the app (BuildProcessService). -->
+        <service
+            android:name=".data.build.BuildProcessService"
+            android:process=":build"
+            android:exported="false" />
+
         <service
             android:name=".service.ChatForegroundService"
             android:enabled="true"

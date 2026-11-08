@@ -10,7 +10,6 @@ import com.bori.app.data.build.DiagnosticsStateHolder
 import com.bori.app.data.prefs.UserPreferencesRepository
 import com.bori.app.data.project.ProjectStateHolder
 import com.bori.app.service.ChatForegroundService
-import com.bori.core.build.BuildEngine
 import com.bori.core.build.model.BuildEvent
 import com.bori.core.build.model.BuildVariant
 import com.bori.core.editor.EditorController
@@ -42,7 +41,7 @@ data class ToolExecutionResult(val output: String, val isError: Boolean = false)
 class ToolExecutor @Inject constructor(
     @ApplicationContext private val context: Context,
     private val editorController: EditorController,
-    private val buildEngine: BuildEngine,
+    private val buildEngine: com.bori.app.data.build.BuildProcessClient,
     private val projectStateHolder: ProjectStateHolder,
     private val buildStateHolder: BuildStateHolder,
     private val diagnosticsStateHolder: DiagnosticsStateHolder,

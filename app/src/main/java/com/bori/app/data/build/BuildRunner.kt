@@ -3,7 +3,6 @@ package com.bori.app.data.build
 import android.content.Context
 import com.bori.app.data.prefs.UserPreferencesRepository
 import com.bori.app.service.ChatForegroundService
-import com.bori.core.build.BuildEngine
 import com.bori.core.build.DiagnosticParser
 import com.bori.core.build.model.BuildEvent
 import com.bori.core.build.model.BuildVariant
@@ -29,7 +28,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class BuildRunner @Inject constructor(
-    private val buildEngine: BuildEngine,
+    private val buildEngine: BuildProcessClient,
     private val buildStateHolder: BuildStateHolder,
     private val diagnosticsStateHolder: DiagnosticsStateHolder,
     private val prefsRepository: UserPreferencesRepository,

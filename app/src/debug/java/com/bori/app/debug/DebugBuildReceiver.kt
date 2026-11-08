@@ -6,7 +6,6 @@ import android.content.Intent
 import com.bori.app.data.build.BuildLock
 import com.bori.app.data.build.KeystoreRepository
 import com.bori.app.service.ChatForegroundService
-import com.bori.core.build.BuildEngine
 import com.bori.core.build.model.BuildEvent
 import com.bori.core.build.model.BuildVariant
 import com.bori.core.build.model.KeystoreConfig
@@ -30,7 +29,7 @@ import javax.inject.Inject
  */
 @AndroidEntryPoint
 class DebugBuildReceiver : BroadcastReceiver() {
-    @Inject lateinit var buildEngine: BuildEngine
+    @Inject lateinit var buildEngine: com.bori.app.data.build.BuildProcessClient
     @Inject lateinit var projectRepository: ProjectRepository
     @Inject lateinit var keystoreRepository: KeystoreRepository
     @Inject lateinit var buildLock: BuildLock

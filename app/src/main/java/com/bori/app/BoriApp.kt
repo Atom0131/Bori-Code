@@ -26,8 +26,16 @@ class BoriApp : Application() {
         com.bori.core.project.ProjectRepository.attach(this)
         super.onCreate()
         applyHiddenApiBypass()
+        // The ":build" process (BuildProcessService) only compiles; the app-wide jobs stay in the main one.
+        if (isBuildProcess()) return
         observeGemmaState()
         startLinuxJobs(this, appScope)
+    }
+
+    private fun isBuildProcess(): Boolean {
+        val name = if (android.os.Build.VERSION.SDK_INT >= 28) getProcessName()
+            else runCatching { java.io.File("/proc/self/cmdline").readText().trimEnd('\u0000') }.getOrDefault("")
+        return name.endsWith(":build")
     }
 
     private fun observeGemmaState() {
