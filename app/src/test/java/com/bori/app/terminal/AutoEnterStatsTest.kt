@@ -70,4 +70,23 @@ class AutoEnterStatsTest {
         assertNull(AutoEnterStats.parse("""{"hello":"world"}"""))
         assertEquals(emptyMap<String, Int>(), AutoEnterStats.parse("""{"version":1,"days":{}}"""))
     }
+
+    @Test fun mirrorCopyFollowsEveryAdd() {
+        val dir = tmp.newFolder()
+        File(dir, "stats.json").writeText("""{"version":1,"days":{"2026-01-02":7}}""")
+        val mirror = File(tmp.newFolder(), "auto-enter/stats.json")
+        val stats = AutoEnterStats(dir, mirror)
+        // Written on load, before any Enter, so a backup right after an update already has it.
+        assertEquals(mapOf("2026-01-02" to 7), AutoEnterStats.parse(mirror.readText()))
+        stats.add()
+        assertEquals(8, AutoEnterStats.parse(mirror.readText())!!.values.sum())
+    }
+
+    @Test fun timeSavedReadsNaturally() {
+        assertEquals("none", AutoEnterStats.timeSaved(0))
+        assertEquals("under a minute", AutoEnterStats.timeSaved(1))
+        assertEquals("about 1 min", AutoEnterStats.timeSaved(3))
+        assertEquals("about 1 h 0 min", AutoEnterStats.timeSaved(180))
+        assertEquals("about 2 h 30 min", AutoEnterStats.timeSaved(450))
+    }
 }

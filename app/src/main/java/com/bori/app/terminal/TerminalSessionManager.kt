@@ -91,7 +91,17 @@ class TerminalSessionManager @Inject constructor(
     /** The tabs auto-enter is on for, by tab id. */
     val autoEnter: StateFlow<Map<Int, AutoEnterStatus>> = _autoEnter.asStateFlow()
 
-    val autoEnterStats by lazy { AutoEnterStats(File(context.filesDir, "auto-enter")) }
+    val autoEnterStats by lazy {
+        AutoEnterStats(
+            File(context.filesDir, "auto-enter"),
+            mirror = context.getExternalFilesDir(null)?.let { File(it, "auto-enter/stats.json") },
+        )
+    }
+
+    init {
+        // Loads the counts off the main thread and refreshes the copy the PC backup reads.
+        Thread({ autoEnterStats }, "auto-enter-stats").start()
+    }
 
     private val main = Handler(Looper.getMainLooper())
     private var checkPending = false

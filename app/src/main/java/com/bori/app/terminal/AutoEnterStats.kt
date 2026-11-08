@@ -20,7 +20,14 @@ import java.time.temporal.TemporalAdjusters
  * `stats.json.bak`, plus one `backups/stats-<day>.json` a day (newest [KEEP_SNAPSHOTS]). A damaged
  * file is renamed, never overwritten, and the valid backup with the highest total is restored.
  */
-class AutoEnterStats(private val dir: File) {
+class AutoEnterStats(
+    private val dir: File,
+    /**
+     * A copy of stats.json kept where adb can read it (Bori Code's folder in Android/data), so the
+     * PC backup (`scripts/backup_fold.sh`) picks the counts up even from a non-debuggable build.
+     */
+    private val mirror: File? = null,
+) {
     private val file = File(dir.apply { mkdirs() }, "stats.json")
     private val bak = File(dir, "stats.json.bak")
     private val backups = File(dir, "backups")
@@ -32,6 +39,7 @@ class AutoEnterStats(private val dir: File) {
 
     init {
         load()
+        writeMirror()
     }
 
     data class Totals(val today: Int, val week: Int, val month: Int, val year: Int, val all: Int)
@@ -131,6 +139,7 @@ class AutoEnterStats(private val dir: File) {
         tmp.writeText(json.toString(1))
         if (file.isFile && read(file) != null) file.copyTo(bak, overwrite = true)
         if (!tmp.renameTo(file)) error("rename failed")
+        writeMirror()
         runCatching {
             backups.mkdirs()
             file.copyTo(File(backups, "stats-${LocalDate.now()}.json"), overwrite = true)
@@ -142,12 +151,38 @@ class AutoEnterStats(private val dir: File) {
         }
     }
 
+    private fun writeMirror() {
+        val to = mirror ?: return
+        if (!file.isFile) return
+        runCatching {
+            to.parentFile?.mkdirs()
+            file.copyTo(to, overwrite = true)
+        }
+    }
+
     private fun read(f: File): Map<String, Int>? = runCatching { parse(f.readText()) }.getOrNull()
 
     private fun stamp() = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
 
     companion object {
         private const val KEEP_SNAPSHOTS = 90
+
+        /**
+         * Rough time one auto Enter saves you: noticing the prompt, switching to it, reading it and
+         * tapping. An estimate (only Enters are counted); `scripts/backup_fold.sh` uses the same 20 s.
+         */
+        const val SECONDS_SAVED_PER_ENTER = 20
+
+        /** "about 1 h 25 min" for [enters] auto Enters. */
+        fun timeSaved(enters: Int): String {
+            val minutes = (enters.toLong() * SECONDS_SAVED_PER_ENTER + 30) / 60
+            return when {
+                enters <= 0 -> "none"
+                minutes < 1 -> "under a minute"
+                minutes < 60 -> "about $minutes min"
+                else -> "about ${minutes / 60} h ${minutes % 60} min"
+            }
+        }
 
         /**
          * The per-day counts in [text], or null when it isn't a valid stats file. Takes the helper's

@@ -87,6 +87,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bori.app.terminal.AutoEnterStats
 import com.bori.app.terminal.AutoEnterStatus
 import com.bori.app.terminal.CliLauncher
 import com.bori.app.terminal.PaneLayout
@@ -437,7 +438,9 @@ fun TerminalScreen(
                 onToggleAutoEnter = { focusedTab?.let { toggleAutoEnter(it.id) } },
                 autoEnterTotals = {
                     val t = viewModel.autoEnterTotals()
-                    "${t.today} Enters today, ${t.week} this week, ${t.month} this month, ${t.all} in all"
+                    "${t.today} Enters today, ${t.week} this week, ${t.month} this month, ${t.all} in all.\n" +
+                        "Time saved: ${AutoEnterStats.timeSaved(t.all)} in all, ${AutoEnterStats.timeSaved(t.week)} this week " +
+                        "(about ${AutoEnterStats.SECONDS_SAVED_PER_ENTER} s per Enter)"
                 },
                 onExportStats = viewModel::exportAutoEnterStats,
                 onImportStats = viewModel::importAutoEnterStats,
@@ -462,7 +465,8 @@ fun TerminalScreen(
                         "(\"Do you want to proceed?\", [y/n], ❯ Yes). That approves every command and edit " +
                         "it asks about, so only use it on work you trust. It never answers a question or a plan, " +
                         "Linux's blocked commands stay blocked, and it turns itself off after 20 minutes " +
-                        "with nothing to approve.\n\nEnters so far: ${totals.today} today, ${totals.week} this week, ${totals.all} in all.",
+                        "with nothing to approve.\n\nEnters so far: ${totals.today} today, ${totals.week} this week, ${totals.all} in all " +
+                        "(${AutoEnterStats.timeSaved(totals.all)} saved).",
                 )
             },
             confirmButton = {
