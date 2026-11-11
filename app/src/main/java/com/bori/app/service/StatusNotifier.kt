@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import com.bori.app.MainActivity
+import com.bori.app.R
 
 /**
  * Bori's one ongoing notification: what's running and what state it's in (building, an agent working,
@@ -16,6 +17,8 @@ import com.bori.app.MainActivity
  * foreground. An agent that needs the user, or finishes, also gets a short heads-up ([alert]).
  */
 object StatusNotifier {
+    /** Celeste from the launcher icon; the shade tints the small icon with it. */
+    const val BORI_CELESTE = 0xFF4FB4F2.toInt()
     const val CHANNEL_ID = "bori_status"
     const val NOTIFICATION_ID = 1002
     private const val ALERT_CHANNEL_ID = "agent_attention"
@@ -86,7 +89,8 @@ object StatusNotifier {
             .setContentTitle("Bori - Code · $mode")
             .setContentText(lines.firstOrNull() ?: "Running")
             .setStyle(NotificationCompat.BigTextStyle().bigText(lines.joinToString("\n")))
-            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setSmallIcon(R.drawable.ic_stat_bori_code)
+            .setColor(BORI_CELESTE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(openApp(context))
             .setOngoing(true)
@@ -106,7 +110,8 @@ object StatusNotifier {
         val n = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setSmallIcon(R.drawable.ic_stat_bori_code)
+            .setColor(BORI_CELESTE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openApp(context))
             .setAutoCancel(true)
