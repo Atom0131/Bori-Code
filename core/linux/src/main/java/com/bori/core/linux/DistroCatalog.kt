@@ -139,6 +139,8 @@ object DistroCatalog {
         """.trimIndent(),
         installedSizeMb = 1400,
         installPackages = "pacman -S --needed --noconfirm",
+        // Hidden until its rootfs release (with the GPL source offer) is published.
+        offered = false,
     )
 
     /** yay's official aarch64 release (github.com/Jguer/yay), checked 2026-11-11. Static apart from libc. */

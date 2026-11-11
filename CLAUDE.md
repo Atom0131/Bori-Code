@@ -15,7 +15,7 @@ on-device Gemma 4 E2B/E4B via LiteRT-LM).
   new app on devices and on Play). Data: `bori.db`, `bori_keyvault`, projects in `files/Bori`. Backups
   have the `BCBK` header; the old `MMBK` (Mimir) ones still import. The keystore alias inside
   `bori-code-release.jks` is still `mimir`. That's only a name in the key file.
-- versionName `4.4.2`, versionCode `12`
+- versionName `4.5.0`, versionCode `13`
 - minSdk 26, targetSdk 35, compileSdk 37 (Android 8.0 → 15; compileSdk only makes newer APIs visible), JVM target 11
 - ~160 Kotlin files across 6 Gradle modules. UI is 100% Jetpack Compose. DI is Hilt.
 
