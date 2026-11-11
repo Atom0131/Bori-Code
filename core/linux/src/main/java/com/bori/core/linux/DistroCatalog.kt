@@ -13,7 +13,7 @@ data class RootfsArchive(
 
 /**
  * A Linux distro Bori Code can install. [setupScript] runs once inside the fresh rootfs (as root,
- * through `/bin/sh -c`) to install what the coding CLIs need: Node and npm, git, ripgrep, curl.
+ * through `/bin/sh -c`) to install what the coding CLIs need: Node and npm, git, ripgrep, curl, Python.
  */
 data class Distro(
     val id: String,
@@ -26,15 +26,24 @@ data class Distro(
     val installedSizeMb: Int,
     /** musl libc (Alpine) instead of glibc: prebuilt CLIs need their musl builds. */
     val musl: Boolean = false,
+    /** Installs the packages named after it, without asking (for CLI install scripts that need one). */
+    val installPackages: String,
+    /**
+     * False for a distro no longer offered for new installs (see [DistroCatalog]); one already
+     * installed keeps working and is still listed so it can be used, reinstalled or deleted.
+     */
+    val offered: Boolean = true,
 ) {
     /** The archive for this device, or null if the device's ABI isn't supported. */
     fun archiveForDevice(): RootfsArchive? = Build.SUPPORTED_ABIS.firstNotNullOfOrNull { archives[it] }
 }
 
 /**
- * The distros offered at setup. Rule (user decision, 2026-10-24): never list a distro that does or
- * plans age verification. Ubuntu, Fedora and Pop!_OS are left out for that reason; Debian stays
- * out until the user OKs it. Dropping a distro later is one edit here.
+ * The distros offered at setup. Rule (user decision, 2026-10-24, tightened 2026-11-11): only distros
+ * that have publicly declared they won't do age verification. Void and Artix have developer
+ * statements; Alpine never said either way, so it's no longer offered ([Distro.offered] false; existing installs
+ * keep working). Ubuntu, Fedora, Pop!_OS, Debian and Arch are left out. Dropping a distro later is one
+ * edit here.
  */
 object DistroCatalog {
     val VOID = Distro(
@@ -62,6 +71,7 @@ object DistroCatalog {
             xbps-remove -Oy
         """.trimIndent(),
         installedSizeMb = 700,
+        installPackages = "xbps-install -Sy",
     )
 
     val ALPINE = Distro(
@@ -88,9 +98,54 @@ object DistroCatalog {
         """.trimIndent(),
         installedSizeMb = 200,
         musl = true,
+        installPackages = "apk add",
+        offered = false,
     )
 
-    val all: List<Distro> = listOf(VOID, ALPINE)
+    /**
+     * Artix Linux (Arch-based, no systemd) for yay and the AUR. Its developers declared they will never
+     * require verification or identification from users. The rootfs is Bori Code's slim repack of
+     * ARMtix's official aarch64 image (kernels, firmware and disk/network daemons removed, about 90 MB
+     * instead of 1.17 GB), made by `scripts/build_artix_rootfs.sh` and hosted on Bori Code's GitHub
+     * releases. arm64 only: Artix publishes no x86_64 rootfs.
+     *
+     * yay is its official release binary, pinned by SHA-256. makepkg runs through GuestPolicy's
+     * proot wrapper (no root refusal, no fakeroot). ARMtix's repos are unsigned (SigLevel = Never in its
+     * own pacman.conf), so pacman's keyring isn't set up; packages come over HTTPS from its mirrors.
+     */
+    val ARTIX = Distro(
+        id = "artix",
+        name = "Artix Linux",
+        summary = "Arch-based, glibc, no systemd. yay for the AUR. arm64 only.",
+        archives = mapOf(
+            "arm64-v8a" to RootfsArchive(
+                url = "https://github.com/Atom0131/Bori-Code/releases/download/rootfs-artix-20260921/bori-artix-aarch64-20260921.tar.xz",
+                sha256 = "8c3b4b78fec39a978a17bd6547913d1795c93d07e2b267c74cd2b151b4f7cf4f",
+                sizeBytes = 90_253_984,
+            ),
+        ),
+        setupScript = """
+            set -e
+            pacman -Syu --noconfirm
+            pacman -S --needed --noconfirm bash nodejs npm git github-cli ripgrep curl ca-certificates openssh python base-devel
+            cd /tmp && rm -rf bori-yay && mkdir bori-yay && cd bori-yay
+            curl -fL --progress-bar -o yay.tar.gz '$YAY_URL'
+            echo '$YAY_SHA256  yay.tar.gz' | sha256sum -c -
+            tar -xzf yay.tar.gz
+            install -m 755 yay_*/yay /usr/local/bin/yay
+            cd /tmp && rm -rf bori-yay
+            yes | pacman -Scc >/dev/null 2>&1 || true
+            yay --version
+        """.trimIndent(),
+        installedSizeMb = 1400,
+        installPackages = "pacman -S --needed --noconfirm",
+    )
+
+    /** yay's official aarch64 release (github.com/Jguer/yay), checked 2026-11-11. Static apart from libc. */
+    private const val YAY_URL = "https://github.com/Jguer/yay/releases/download/v13.1.0/yay_13.1.0_aarch64.tar.gz"
+    private const val YAY_SHA256 = "be9bde82b0ae601365bf38515a4bfe60840a0b9945994cc8631a974c0492aa2c"
+
+    val all: List<Distro> = listOf(VOID, ARTIX, ALPINE)
 
     fun get(id: String): Distro? = all.firstOrNull { it.id == id }
 }

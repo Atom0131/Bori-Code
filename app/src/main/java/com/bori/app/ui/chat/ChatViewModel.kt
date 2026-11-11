@@ -49,6 +49,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -123,8 +126,92 @@ class ChatViewModel @Inject constructor(
     // surfaced in the Settings usage view.
     private val usageRepository: com.bori.app.data.usage.UsageRepository,
     private val tutorialSession: com.bori.app.ui.tutorial.TutorialSession,
+    private val terminalBridge: com.bori.app.terminal.TerminalBridge,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    // ---- Chat → a coding CLI in a terminal tab (TerminalBridge)
+
+    /** Terminal tabs running Claude Code or Antigravity, which Chat can send to. */
+    val terminalTargets: StateFlow<List<com.bori.app.terminal.TerminalBridge.Target>> =
+        terminalBridge.targets.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val _terminalTabId = MutableStateFlow<Int?>(null)
+    /** The tab Chat sends to; null for Bori's own agent. Falls back to null when the tab closes. */
+    val terminalTarget: StateFlow<com.bori.app.terminal.TerminalBridge.Target?> =
+        combine(_terminalTabId, terminalTargets) { id, targets -> targets.firstOrNull { it.tabId == id } }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** The conversation in the chosen terminal tab, read from the CLI's own transcript. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val terminalMessages: StateFlow<List<ChatMessageEntity>> =
+        terminalTarget.map { it?.tabId }.distinctUntilChanged()
+            .flatMapLatest { id -> if (id == null) flowOf(emptyList()) else terminalBridge.messages(id) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The chosen tab's terminal screen, for a CLI whose transcript Chat can't read; null otherwise. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val terminalScreen: StateFlow<String?> =
+        terminalTarget.map { t -> t?.tabId?.takeIf { !t.readable } }.distinctUntilChanged()
+            .flatMapLatest { id -> if (id == null) flowOf(null) else terminalBridge.screen(id) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private val _agentCommands = MutableStateFlow<List<com.bori.app.terminal.SlashCommand>>(emptyList())
+    /** The "/" commands of the agent Chat sends to: the terminal CLI's, or Bori agent's own. */
+    val agentCommands: StateFlow<List<com.bori.app.terminal.SlashCommand>> = _agentCommands.asStateFlow()
+
+    /** Reads the "/" commands again (new command files show up); called when "/" is typed. */
+    fun refreshAgentCommands() {
+        val target = terminalTarget.value
+        if (target == null) { _agentCommands.value = boriCommands; return }
+        viewModelScope.launch {
+            val list = terminalBridge.commands(target, activeRoot())
+            if (terminalTarget.value?.tabId == target.tabId) _agentCommands.value = list
+        }
+    }
+
+    fun chooseTerminalTarget(tabId: Int?) { _terminalTabId.value = tabId }
+
+    /** Puts the chosen tab in the terminal's focused pane (the screen switches to it). */
+    fun showTargetInTerminal() { terminalTarget.value?.let { terminalBridge.showInTerminal(it.tabId) } }
+
+    private val _startableAgents = MutableStateFlow<List<com.bori.app.terminal.TerminalBridge.Startable>>(emptyList())
+    /** Claude Code / Antigravity installed in Linux, which Chat can start in a terminal tab. */
+    val startableAgents: StateFlow<List<com.bori.app.terminal.TerminalBridge.Startable>> = _startableAgents.asStateFlow()
+
+    /** Looks for installed agents again (files only; no guest is started). */
+    fun refreshStartableAgents() {
+        viewModelScope.launch {
+            _startableAgents.value = withContext(Dispatchers.IO) { runCatching { terminalBridge.startable() }.getOrDefault(emptyList()) }
+        }
+    }
+
+    private val _chatFullScreen = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    /** Chat asks to fill the screen: an agent was started from Chat and runs behind it. */
+    val chatFullScreen: SharedFlow<Unit> = _chatFullScreen.asSharedFlow()
+
+    /**
+     * Starts [agent] in a new terminal tab in the open project and points Chat at it; Chat fills the
+     * screen while it runs behind. [firstMessage] goes as soon as the agent is ready for it.
+     */
+    fun startTerminalAgent(agent: com.bori.app.terminal.TerminalBridge.Startable, firstMessage: String?) {
+        val tabId = terminalBridge.start(agent, activeRoot())
+        _terminalTabId.value = tabId
+        _chatFullScreen.tryEmit(Unit)
+        val text = firstMessage?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        viewModelScope.launch {
+            if (terminalBridge.awaitReady(tabId)) {
+                sendToTerminal(tabId, text)
+            } else {
+                _pendingChatInput.value = text
+                _snackbarEvent.emit("${agent.cli.title} is still starting. Send again in a moment.")
+            }
+        }
+    }
+
+    private fun sendToTerminal(tabId: Int, text: String) {
+        terminalBridge.send(tabId, text)?.let { why -> viewModelScope.launch { _snackbarEvent.emit(why) } }
+    }
 
     val availableChatProviders: StateFlow<Map<AiProvider, List<String>>> =
         downloadManager.downloadState.combine(prefsRepository.preferences) { state, prefs ->
@@ -693,6 +780,20 @@ class ChatViewModel @Inject constructor(
 
     val slashCommandNames: List<String> = slashCommands.keys.toList() + "/plan" + "/ask" + "/tutorial" + "/clear" + "/compact"
 
+    /** Bori agent's own commands, for the "/" list. */
+    private val boriCommands: List<com.bori.app.terminal.SlashCommand> = listOf(
+        "/plan" to "Plan mode: writes a plan before editing",
+        "/ask" to "Ask mode: clarifies the request before planning",
+        "/clear" to "Clear all messages in this conversation",
+        "/compact" to "Summarize old messages to free up context",
+        "/tutorial" to "Restart the guided tutorial",
+        "/explain" to "Explain the code in detail",
+        "/fix" to "Find and fix bugs in the code",
+        "/test" to "Write JUnit4 unit tests",
+        "/refactor" to "Refactor for readability and performance",
+        "/docs" to "Write KDoc documentation",
+    ).map { (n, d) -> com.bori.app.terminal.SlashCommand(n, d) }
+
     private val _tutorialRequested = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val tutorialRequested: SharedFlow<Unit> = _tutorialRequested.asSharedFlow()
 
@@ -790,6 +891,8 @@ class ChatViewModel @Inject constructor(
     }
 
     fun sendMessage(userText: String, skipModeDetection: Boolean = false, ignoreAgentLock: Boolean = false) {
+        // Sending to a CLI in the terminal: typed into that tab as is; Bori's own agent isn't involved.
+        terminalTarget.value?.let { sendToTerminal(it.tabId, userText); return }
         // Re-enter Plan Mode if a session-persistent plan was temporarily exited for the last build.
         if (_rearmPlanModeNextSend.value) {
             _rearmPlanModeNextSend.value = false

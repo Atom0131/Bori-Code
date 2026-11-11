@@ -12,7 +12,9 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.bori.app.MainActivity
+import com.bori.app.R
 import com.bori.core.linux.CodingCli
+import com.bori.core.linux.CustomCliStore
 import com.bori.core.linux.DistroCatalog
 import com.bori.core.linux.DistroInstaller
 import com.bori.core.linux.InstallState
@@ -33,6 +35,7 @@ import javax.inject.Inject
 class LinuxInstallService : Service() {
 
     @Inject lateinit var installer: DistroInstaller
+    @Inject lateinit var customClis: CustomCliStore
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var watching = false
@@ -84,7 +87,7 @@ class LinuxInstallService : Service() {
             PendingIntent.FLAG_IMMUTABLE,
         )
         val running = state as? InstallState.Running
-        val subject = running?.cliId?.let { CodingCli.get(it)?.title }
+        val subject = running?.cliId?.let { CodingCli.get(it)?.title ?: customClis.get(running.distroId, it)?.title }
             ?: running?.distroId?.let { id -> DistroCatalog.all.firstOrNull { it.id == id }?.name }
             ?: "Linux"
         val step = running?.step
@@ -101,7 +104,8 @@ class LinuxInstallService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Bori - Code · Linux environment")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setSmallIcon(R.drawable.ic_stat_bori_code)
+            .setColor(StatusNotifier.BORI_CELESTE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(openApp)
             .setOngoing(true)

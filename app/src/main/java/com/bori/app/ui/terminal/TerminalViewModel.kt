@@ -18,7 +18,6 @@ import com.bori.app.terminal.Split
 import com.bori.app.terminal.TerminalSessionManager
 import com.bori.app.terminal.TerminalTab
 import com.termux.terminal.TerminalSession
-import kotlinx.coroutines.delay
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -164,13 +163,7 @@ class TerminalViewModel @Inject constructor(
      */
     fun sendLine(session: TerminalSession?, line: String) {
         session ?: return
-        viewModelScope.launch {
-            if (line.isNotEmpty()) {
-                session.write(line)
-                delay(40)
-            }
-            session.write("\r")
-        }
+        manager.typeLine(session, line)
     }
 
     fun showKeys(shown: Boolean) { _keysShown.value = shown }

@@ -29,8 +29,11 @@ interface LinuxShells {
     fun setAgentStateListener(listener: (tabId: Int, state: String, json: String) -> Unit)
 }
 
-/** A coding CLI the terminal can open in a new tab: [command] runs in a Linux shell titled [title]. */
-data class CliLauncher(val id: String, val title: String, val command: String)
+/**
+ * A coding CLI the terminal can open in a new tab: [command] runs in a Linux shell titled [title].
+ * [custom] for the user's own programs, which Bori Code doesn't promise work.
+ */
+data class CliLauncher(val id: String, val title: String, val command: String, val custom: Boolean = false)
 
 /** A host process to start: [executable] with the full [argv] (argv[0] included), [env] and [cwd]. */
 data class ShellCommand(

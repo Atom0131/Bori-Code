@@ -128,6 +128,13 @@ class TerminalSessionManager @Inject constructor(
     private val agentStates = HashMap<Int, AgentState>()
     private val agyChecked = HashMap<Int, Long>()
 
+    private val _agentStateMap = MutableStateFlow<Map<Int, AgentState>>(emptyMap())
+    /** Each coding agent's last reported state, by tab id (for Chat's terminal bridge). */
+    val agentStateMap: StateFlow<Map<Int, AgentState>> = _agentStateMap.asStateFlow()
+
+    /** Claude Code's transcript (a guest path, from its hooks) for each tab running it. */
+    private val claudeTranscripts = java.util.concurrent.ConcurrentHashMap<Int, String>()
+
     init {
         linux.setAgentStateListener(::onAgentState)
     }
@@ -137,6 +144,8 @@ class TerminalSessionManager @Inject constructor(
         val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return
         // Only Claude Code has the hooks, so a plain shell that reports is running it.
         if (tab.agent == null) updateTab(tab.session) { it.copy(agent = "Claude Code") }
+        // The hook's JSON is cut at 4000 bytes, so read the path without parsing the whole thing.
+        TRANSCRIPT_PATH.find(json)?.groupValues?.get(1)?.let { claudeTranscripts[tabId] = it }
         var detail: String? = null
         val next = when (state) {
             "working" -> AgentState.WORKING
@@ -194,6 +203,7 @@ class TerminalSessionManager @Inject constructor(
             StatusNotifier.Agent(tab.agent!!, agentStates[tab.id], enters[tab.id]?.enters)
         }
         StatusNotifier.terminalTabs = tabs.size
+        _agentStateMap.value = agentStates.toMap()
         updateWake()
         StatusNotifier.refresh(context)
     }
@@ -299,7 +309,75 @@ class TerminalSessionManager @Inject constructor(
         TerminalService.start(context)
         publish()
         if (tab.command == "antigravity") ensureTicking()
+        ensureStarted(session)
         return tab
+    }
+
+    /**
+     * A session's process starts when a view gives it a size, and a hidden terminal (Chat full screen,
+     * or a tab started from Chat) has none. Start it at a typical size instead; the view resizes it to
+     * the real one when it's shown.
+     */
+    private fun ensureStarted(session: TerminalSession) {
+        main.postDelayed({
+            if (session.emulator == null && _tabs.value.any { it.session === session }) {
+                session.updateSize(HIDDEN_COLUMNS, HIDDEN_ROWS, HIDDEN_CELL_W, HIDDEN_CELL_H)
+            }
+        }, START_GRACE_MS)
+    }
+
+    /**
+     * Milliseconds since tab [tabId] last printed anything, or null before its first output (a CLI that
+     * hasn't drawn yet). Chat waits on it to send a first message to an agent it just started.
+     */
+    fun quietMs(tabId: Int): Long? {
+        val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return null
+        val last = lastOutput[tab.session] ?: return null
+        return System.currentTimeMillis() - last
+    }
+
+    /**
+     * The coding agent's own transcript for tab [tabId], on the host: Claude Code's from its hooks
+     * (known once it has had a prompt), Antigravity's newest one. A conversation log, never a sign-in file.
+     */
+    fun transcriptFile(tabId: Int): File? {
+        val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return null
+        val home = (tab.kind as? ShellKind.Linux)?.distroId?.let(linux::guestHome) ?: return null
+        if (tab.command == "antigravity") return AgyTranscript.latest(home)
+        val guest = claudeTranscripts[tabId] ?: return null
+        if (!guest.startsWith("/root/") || ".." in guest) return null
+        return File(home, guest.removePrefix("/root/"))
+    }
+
+    /** The guest home of tab [tabId]'s distro on the host, or null for an Android shell. */
+    fun guestHome(tabId: Int): File? {
+        val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return null
+        return (tab.kind as? ShellKind.Linux)?.distroId?.let(linux::guestHome)
+    }
+
+    /**
+     * What tab [tabId]'s terminal shows now: its screen and the scrollback above it, the last
+     * [maxLines] lines, without trailing blank lines. A full-screen CLI gives just its current screen.
+     * Main thread.
+     */
+    fun screenText(tabId: Int, maxLines: Int = SCREEN_MAX_LINES): String? {
+        val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return null
+        val text = tab.session.emulator?.screen?.transcriptText ?: return null
+        return text.lines().map { it.trimEnd() }.dropLastWhile { it.isEmpty() }.takeLast(maxLines).joinToString("\n")
+    }
+
+    /**
+     * Types [text] into [session], then Enter a moment later, so a TUI reading the text as a paste
+     * still sees Enter as a key press. Text with line breaks goes as one (bracketed) paste, so a CLI
+     * gets it as one message.
+     */
+    fun typeLine(session: TerminalSession, text: String) {
+        main.post {
+            if (session.isRunning) {
+                if ('\n' in text) session.emulator?.paste(text) else if (text.isNotEmpty()) session.write(text)
+            }
+        }
+        main.postDelayed({ if (session.isRunning) session.write("\r") }, if (text.isEmpty()) 0L else ENTER_DELAY_MS)
     }
 
     /** Shows tab [id] in the focused pane, or focuses the pane already showing it. */
@@ -371,6 +449,7 @@ class TerminalSessionManager @Inject constructor(
         }
         agentStates.remove(id)
         agyChecked.remove(id)
+        claudeTranscripts.remove(id)
         lastOutput.remove(tab.session)
         publish()
         if (remaining.isEmpty()) TerminalService.stop(context)
@@ -386,6 +465,7 @@ class TerminalSessionManager @Inject constructor(
         _layout.update { it.copy(slots = List(it.split.panes) { null }, focused = 0) }
         agentStates.clear()
         agyChecked.clear()
+        claudeTranscripts.clear()
         lastOutput.clear()
         publish()
         TerminalService.stop(context)
@@ -472,10 +552,18 @@ class TerminalSessionManager @Inject constructor(
 
     private companion object {
         const val TAG = "Terminal"
+        const val SCREEN_MAX_LINES = 300
         const val TRANSCRIPT_ROWS = 4000
         const val TICK_MS = 1_000L
         const val SETTLE_MS = 300L
         const val WAKE_QUIET_MS = 15 * 60_000L
         const val WAKE_CHECK_MS = 60_000L
+        const val ENTER_DELAY_MS = 40L
+        const val START_GRACE_MS = 400L
+        const val HIDDEN_COLUMNS = 120
+        const val HIDDEN_ROWS = 40
+        const val HIDDEN_CELL_W = 16
+        const val HIDDEN_CELL_H = 34
+        val TRANSCRIPT_PATH = Regex("\"transcript_path\"\\s*:\\s*\"([^\"]+)\"")
     }
 }

@@ -11,6 +11,8 @@ import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import com.bori.core.linux.CodingCli
+import com.bori.core.linux.CustomCliStore
+import com.bori.core.linux.DistroCatalog
 import com.bori.core.linux.GuestPolicy
 import com.bori.core.linux.ProotLauncher
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -24,6 +26,7 @@ class ProotShells @Inject constructor(
     @ApplicationContext private val context: Context,
     private val proot: ProotLauncher,
     private val guestPolicy: GuestPolicy,
+    private val customClis: CustomCliStore,
 ) : LinuxShells {
 
     override fun installedDistros(): List<String> = proot.installedDistros()
@@ -46,10 +49,10 @@ class ProotShells @Inject constructor(
     override fun guestHome(distroId: String): File = File(proot.rootfs(distroId), "root")
 
     override fun installedClis(distroId: String): List<CliLauncher> {
-        val rootfs = proot.rootfs(distroId)
-        return CodingCli.entries
-            .filter { proot.guestFileExists(rootfs, it.guestBinary) }
-            .map { CliLauncher(it.id, it.title, it.command) }
+        val distro = DistroCatalog.get(distroId) ?: return emptyList()
+        return (CodingCli.builtIns.filter { it.availableIn(distro) } + customClis.forDistro(distroId))
+            .filter { proot.guestHasCommand(distroId, it.program) }
+            .map { CliLauncher(it.id, it.title, it.command, it.custom) }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())

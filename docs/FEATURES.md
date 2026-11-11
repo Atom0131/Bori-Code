@@ -82,8 +82,23 @@ under `app/src/main/java/com/bori/app/`.
   `TerminalKeyboard.kt`: Bori's compact terminal keyboard (suggestions, swipe typing, arrows by Enter,
   F1-F12, Del, split in two halves when 600dp or wider), used instead of the phone's unless the user switches with the globe key, which opens a
   typing box with the phone keyboard's own prediction. Suggestions and swipes: `terminal/WordPredictor.kt`.
+- **Coding CLIs** (full flavor, Settings → Linux environment): `core/linux/.../CodingCli.kt` lists the built-ins
+  (Claude Code, Antigravity, Codex, Gemini CLI, Copilot CLI, OpenCode, Crush, Aider (glibc only), Kimi Code, Qwen Code,
+  CodeBuddy Code), installed with npm, uv or Antigravity's manifest. One guest start checks all their versions
+  (`DistroInstaller.cliVersions`). **Your own programs** (`CustomCliStore`, `files/linux/custom-clis.json`): upload a
+  program file into /usr/local/bin, name a command installed by hand, or give an install script; marked "not guaranteed
+  to work". The terminal's CLI menu lists every installed one (`ProotShells.installedClis`). `GuestPolicy` also writes
+  Bori's rules into Codex's, Gemini's, Qwen's and OpenCode's global instruction files (not over the user's own).
+- **Chat → terminal agents** (`terminal/TerminalBridge.kt`): Chat's "Send to" bar picks Bori's agent or a Claude Code /
+  Antigravity tab, and **Start…** opens one in a new tab behind Chat (Chat goes full screen; the hidden session starts at
+  120×40 via `TerminalSessionManager.ensureStarted`). Messages are typed into the tab (`typeLine`, bracketed paste for
+  several lines); replies are read from the CLI's own transcript (Claude's `transcript_path` from its hooks, agy's
+  `AgyTranscript`), never its sign-in files. Claude Code's diff side panel is off (`enabledPlugins` in managed settings).
+- **Guest DNS** (`core/linux/.../GuestNetwork.kt`): each rootfs's resolv.conf lists the phone's active-network DNS (a VPN's,
+  e.g. Tailscale), the underlying network's, then 1.1.1.1; rewritten on network changes. `bori-net` in the guest checks
+  DNS + HTTPS for the CLIs' hosts.
 - **GitHub sign-in** (full flavor, Settings → Linux environment): one GitHub sign-in inside Linux that git,
-  gh, Claude Code and Antigravity all use (`GuestPolicy` writes `bori-github` and git's credential helper).
+  gh and the coding CLIs all use (`GuestPolicy` writes `bori-github` and git's credential helper).
   - **Browser sign-in, like VS Code / GitHub Desktop** (`ui/linux/GitHubAuth.kt`): GitHub's authorize page in
     the browser (PKCE + state), which redirects to `bori-code://github-auth` (`GitHubAuthCallbackActivity`).
     The token goes straight into gh on stdin (`DistroInstaller.signInGitHub` → `bori-github token`) and is

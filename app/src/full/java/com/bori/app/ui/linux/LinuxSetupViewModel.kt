@@ -1,11 +1,15 @@
 package com.bori.app.ui.linux
 
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bori.app.data.project.ProjectStateHolder
 import com.bori.app.terminal.ShellKind
 import com.bori.app.terminal.TerminalSessionManager
 import com.bori.core.linux.CodingCli
+import com.bori.core.linux.CustomCliStore
 import com.bori.core.linux.Distro
 import com.bori.core.linux.DistroCatalog
 import com.bori.core.linux.DistroInstaller
@@ -13,6 +17,7 @@ import com.bori.core.linux.DistroStatus
 import com.bori.core.linux.InstallState
 import com.bori.core.linux.ProotLauncher
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -49,7 +54,17 @@ class LinuxSetupViewModel @Inject constructor(
     private val terminals: TerminalSessionManager,
     private val projectStateHolder: ProjectStateHolder,
     private val githubAuth: GitHubAuth,
+    private val customClis: CustomCliStore,
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    /** A note for the user after adding one of their own programs (a warning or an error); null when none. */
+    private val _customMessage = MutableStateFlow<String?>(null)
+    val customMessage: StateFlow<String?> = _customMessage.asStateFlow()
+
+    fun dismissCustomMessage() {
+        _customMessage.value = null
+    }
 
     val githubAuthState: StateFlow<GitHubAuthState> = githubAuth.state
 
@@ -85,11 +100,16 @@ class LinuxSetupViewModel @Inject constructor(
         }
     }
 
+    /** The built-ins offered in [distro] (Aider isn't on musl), then the user's own for it. */
+    private fun clisFor(distro: Distro): List<CodingCli> =
+        CodingCli.builtIns.filter { it.availableIn(distro) } + customClis.forDistro(distro.id)
+
     fun refresh() {
         val default = proot.defaultDistro
-        val rows = DistroCatalog.all.map { d ->
+        val rows = DistroCatalog.all.mapNotNull { d ->
             val status = installer.status(d.id)
-            val clis = if (status == DistroStatus.INSTALLED) CodingCli.entries.map { CliRow(it, null, checked = false) } else emptyList()
+            if (!d.offered && status == DistroStatus.NOT_INSTALLED) return@mapNotNull null
+            val clis = if (status == DistroStatus.INSTALLED) clisFor(d).map { CliRow(it, null, checked = false) } else emptyList()
             DistroRow(d, status, isDefault = d.id == default, sizeBytes = null, clis = clis)
         }
         _rows.value = rows
@@ -100,19 +120,73 @@ class LinuxSetupViewModel @Inject constructor(
                 updateRow(row.distro.id) { it.copy(sizeBytes = size) }
             }
         }
-        // Each probe starts the guest once (about a second), so they run one after another.
+        // One guest start per distro checks every CLI (about a second, plus each installed CLI's --version).
         viewModelScope.launch {
             rows.filter { it.status == DistroStatus.INSTALLED }.forEach { row ->
-                CodingCli.entries.forEach { cli ->
-                    val version = installer.cliVersion(row.distro.id, cli)
-                    updateRow(row.distro.id) { r ->
-                        r.copy(clis = r.clis.map { if (it.cli == cli) it.copy(version = version, checked = true) else it })
-                    }
+                val versions = installer.cliVersions(row.distro.id, row.clis.map { it.cli })
+                updateRow(row.distro.id) { r ->
+                    r.copy(clis = r.clis.map { it.copy(version = versions[it.cli.id], checked = true) })
                 }
                 val login = installer.githubLogin(row.distro.id)
                 updateRow(row.distro.id) { it.copy(githubLogin = login, githubChecked = true) }
             }
         }
+    }
+
+    /** A free id for the user's own CLI named [name] in [distroId]; `my-` keeps it apart from the built-ins. */
+    private fun customId(distroId: String, name: String): String {
+        val base = "my-" + CustomCliStore.safeName(name).ifBlank { "program" }
+        val taken = customClis.forDistro(distroId).map { it.id }.toSet()
+        return generateSequence(1) { it + 1 }.map { if (it == 1) base else "$base-$it" }.first { it !in taken }
+    }
+
+    /** Adds something the user installed themselves: [command] starts it. */
+    fun addCommandCli(distroId: String, title: String, command: String) {
+        if (command.isBlank()) return
+        customClis.put(
+            CustomCliStore.create(customId(distroId, title.ifBlank { command }), title, command, distroId, CodingCli.Installer.Custom("", "")),
+        )
+        refresh()
+    }
+
+    /** Adds the user's own CLI with their [install] script, and runs it (in the install job, with its log). */
+    fun addScriptCli(distroId: String, title: String, command: String, install: String, uninstall: String) {
+        if (command.isBlank() || install.isBlank()) return
+        val cli = CustomCliStore.create(
+            customId(distroId, title.ifBlank { command }), title, command, distroId, CodingCli.Installer.Custom(install.trim(), uninstall.trim()),
+        )
+        customClis.put(cli)
+        refresh()
+        installer.installCli(distroId, cli)
+    }
+
+    /** Copies the program file at [uri] into [distroId] as [name] (the command that starts it). */
+    fun addProgramFile(distroId: String, uri: Uri, name: String, title: String) {
+        viewModelScope.launch {
+            val safe = CustomCliStore.safeName(name)
+            val result = runCatching {
+                val input = context.contentResolver.openInputStream(uri) ?: error("Couldn't open the file")
+                installer.addProgramFile(distroId, safe, input)
+            }
+            result.onSuccess { warning ->
+                val id = customClis.forDistro(distroId).firstOrNull { it.program == safe }?.id ?: customId(distroId, safe)
+                customClis.put(CustomCliStore.create(id, title, safe, distroId, CodingCli.Installer.Uploaded))
+                _customMessage.value = warning?.let { "$it It's added; Bori Code doesn't guarantee it works." }
+                refresh()
+            }.onFailure { e ->
+                _customMessage.value = "Couldn't add the program: ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+    }
+
+    /** The name a picked file would get as a command: its file name, made safe. */
+    fun suggestedName(uri: Uri): String {
+        val display = runCatching {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            }
+        }.getOrNull() ?: uri.lastPathSegment.orEmpty()
+        return CustomCliStore.safeName(display.substringAfterLast('/'))
     }
 
     /** Re-reads the GitHub sign-in (after a sign-in tab); rows not checked yet are left to [refresh]. */

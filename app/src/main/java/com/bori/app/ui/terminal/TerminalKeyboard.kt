@@ -1,5 +1,6 @@
 package com.bori.app.ui.terminal
 
+import com.bori.theme.util.BoriSheet
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.widget.Toast
@@ -331,7 +332,7 @@ private fun KeysSettingsSheet(
     var s by remember { mutableStateOf(settings) }
     val update: (TerminalKeysSettings) -> Unit = { s = it; onChange(it) }
     val save: () -> Unit = { onDone(s) }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    BoriSheet(onDismiss = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()

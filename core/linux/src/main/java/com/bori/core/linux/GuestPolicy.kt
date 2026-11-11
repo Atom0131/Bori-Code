@@ -37,11 +37,41 @@ class GuestPolicy @Inject constructor(
         runCatching { writeClipboardShim(rootfs) }.onFailure { Log.w(TAG, "Clipboard shim", it) }
         runCatching { writeStatusScript(rootfs) }.onFailure { Log.w(TAG, "Status script", it) }
         runCatching { writeBenchScript(rootfs) }.onFailure { Log.w(TAG, "Bench script", it) }
+        runCatching { writeNetScript(rootfs) }.onFailure { Log.w(TAG, "Network script", it) }
         runCatching { writeProjectRules(rootfs) }.onFailure { Log.w(TAG, "Project rules", it) }
         runCatching { writeShellPrompt(rootfs) }.onFailure { Log.w(TAG, "Shell prompt", it) }
         runCatching { trustWorkspaceRepos(rootfs) }.onFailure { Log.w(TAG, "Git safe.directory", it) }
         runCatching { useGhForGitHub(rootfs) }.onFailure { Log.w(TAG, "Git credential helper", it) }
         runCatching { writeGitHubLogin(rootfs) }.onFailure { Log.w(TAG, "GitHub sign-in script", it) }
+        runCatching { writeMakepkgWrapper(rootfs) }.onFailure { Log.w(TAG, "makepkg wrapper", it) }
+    }
+
+    /**
+     * Pacman distros (Artix): makepkg, which yay runs to build AUR packages, refuses to run as root
+     * and wraps packaging in fakeroot. Under proot every guest program is already a *fake* root
+     * (`-0`; nothing has real root on the phone) and fakeroot's SysV IPC doesn't exist on Android, so
+     * this `makepkg` (first in PATH) runs a copy of the real one with that check and the fakeroot
+     * call taken out, re-made whenever pacman updates /usr/bin/makepkg.
+     */
+    private fun writeMakepkgWrapper(rootfs: File) {
+        if (!File(rootfs, "usr/bin/makepkg").exists()) return
+        val wrapper = File(rootfs, "usr/local/bin/makepkg")
+        wrapper.parentFile?.mkdirs()
+        wrapper.writeText(
+            """
+            |#!/bin/sh
+            |# Written by Bori Code: makepkg for proot, where "root" is already a fake root (see GuestPolicy.kt).
+            |patched=/usr/local/lib/bori/makepkg
+            |if [ ! -f "${'$'}{patched}" ] || [ /usr/bin/makepkg -nt "${'$'}{patched}" ]; then
+            |  mkdir -p /usr/local/lib/bori
+            |  sed -e 's/^\tif (( EUID == 0 )); then$/\tif false; then # Bori Code: proot is a fake root/' \
+            |      -e 's/^\tfakeroot -- bash -\${'$'}- /\tFAKEROOTKEY=bori-proot bash -${'$'}- /' \
+            |      /usr/bin/makepkg > "${'$'}{patched}.tmp" && mv "${'$'}{patched}.tmp" "${'$'}{patched}"
+            |fi
+            |exec bash "${'$'}{patched}" "${'$'}@"
+            |""".trimMargin(),
+        )
+        wrapper.setExecutable(true, false)
     }
 
     /**
@@ -94,6 +124,7 @@ class GuestPolicy @Inject constructor(
             |  echo "Installing the GitHub CLI..."
             |  if command -v xbps-install >/dev/null 2>&1; then xbps-install -Sy github-cli
             |  elif command -v apk >/dev/null 2>&1; then apk add github-cli
+            |  elif command -v pacman >/dev/null 2>&1; then pacman -S --needed --noconfirm github-cli
             |  fi
             |  command -v gh >/dev/null 2>&1 || { echo "Couldn't install the GitHub CLI."; exit 1; }
             |fi
@@ -182,14 +213,14 @@ class GuestPolicy @Inject constructor(
             |  `gh repo create <name> --public --source . --push` (or `--private`). Ask the user which first.
             |
             |## Working with other agents
-            |Bori Code's built-in agent and the other CLI (Claude Code or Antigravity) may work on the same
-            |project. They share three files in the project's `.bori/` folder:
+            |Bori Code's built-in agent and other coding CLIs (Claude Code, Antigravity, Codex, Gemini, OpenCode
+            |and others) may work on the same project. They share three files in the project's `.bori/` folder:
             |- First read `.bori/plan.md` (the shared plan: goal, scope, checklist, `STATUS:`, roles) and
             |  `.bori/handoff.md` (what the last agent did and the last Bori build result), then run
             |  `git status`. Don't redo work the handoff says is done. Stay inside the plan's scope.
             |- `.bori/agent.lock` says who is working now (`agent=`, `task=`, `started=` in epoch ms). If
             |  another agent holds it and it's under 2 hours old, ask the user before editing. Otherwise
-            |  write your own (`agent=Claude Code` or `agent=Antigravity`) and delete it when you finish.
+            |  write your own (`agent=` your name, e.g. `agent=Codex`) and delete it when you finish.
             |- When you finish, update `.bori/handoff.md`: the goal, files changed, what's left and the next
             |  step. Keep its `## Last Bori build` section; Bori Code writes it after each build.
             |
@@ -199,6 +230,18 @@ class GuestPolicy @Inject constructor(
         val rulesDir = File(rootfs, "root/.gemini/config/rules")
         File(rulesDir, "bori-android.md").apply { parentFile?.mkdirs() }
             .writeText("---\ntrigger: always_on\ndescription: \"Bori Code's on-device Android build rules\"\n---\n\n$rules")
+        // The other CLIs' global instructions files (paths from each CLI's docs). Those are the user's
+        // files too, so one the user wrote (no Bori marker at the top) is left alone.
+        listOf(
+            "root/.codex/AGENTS.md", // Codex CLI
+            "root/.gemini/GEMINI.md", // Gemini CLI
+            "root/.qwen/QWEN.md", // Qwen Code
+            "root/.config/opencode/AGENTS.md", // OpenCode
+        ).forEach { path ->
+            val file = File(rootfs, path)
+            if (file.exists() && !file.readText().startsWith(RULES_MARKER)) return@forEach
+            file.apply { parentFile?.mkdirs() }.writeText("$RULES_MARKER\n\n$rules")
+        }
     }
 
     /**
@@ -241,6 +284,9 @@ class GuestPolicy @Inject constructor(
                 put("Notification", hook("notify"))
                 put("Stop", hook("done"))
             })
+            // Claude Code's diff panel opens by itself beside the conversation in a wide terminal
+            // (the unfolded Fold) and squeezes the terminal; `/diff` still shows it when wanted.
+            put("enabledPlugins", JSONObject().put("diff@builtin", false))
         }
         val file = File(rootfs, "etc/claude-code/managed-settings.json")
         file.parentFile?.mkdirs()
@@ -386,6 +432,36 @@ class GuestPolicy @Inject constructor(
     }
 
     /**
+     * `bori-net`: checks the guest's network the way the coding CLIs use it (DNS, then HTTPS) for their
+     * API hosts, one line each with the time taken, for when a CLI reports a network error.
+     */
+    private fun writeNetScript(rootfs: File) {
+        val script = File(rootfs, NET_SCRIPT.removePrefix("/"))
+        script.parentFile?.mkdirs()
+        script.writeText(
+            """
+            |#!/bin/sh
+            |# Written by Bori Code: checks DNS and HTTPS for the coding CLIs' hosts. Changes nothing.
+            |echo "DNS servers (from the phone's network, rewritten when it changes):"
+            |grep -E '^(nameserver|options)' /etc/resolv.conf | sed 's/^/  /'
+            |now() { date +%s%3N 2>/dev/null || date +%s000; }
+            |for h in api.anthropic.com claude.ai daily-cloudcode-pa.googleapis.com generativelanguage.googleapis.com registry.npmjs.org github.com; do
+            |  t=${'$'}(now)
+            |  ips=${'$'}(getent ahosts "${'$'}h" 2>/dev/null | awk '{print ${'$'}1}' | sort -u | head -n 3 | tr '\n' ' ')
+            |  dns=${'$'}(( ${'$'}(now) - t ))
+            |  if [ -z "${'$'}ips" ]; then
+            |    printf '%-36s DNS FAILED after %s ms\n' "${'$'}h" "${'$'}dns"
+            |    continue
+            |  fi
+            |  r=${'$'}(curl -sS -o /dev/null --max-time 15 -w '%{http_code} %{time_connect}s connect, %{time_total}s total, via %{remote_ip}' "https://${'$'}h/" 2>&1 | tail -n 1)
+            |  printf '%-36s DNS %s ms (%s)  HTTPS %s\n' "${'$'}h" "${'$'}dns" "${'$'}ips" "${'$'}r"
+            |done
+            |""".trimMargin(),
+        )
+        script.setExecutable(true, false)
+    }
+
+    /**
      * `bori-bench`: half a minute of timings that show where the time goes under proot (process starts,
      * file access, git, search, plain computation), one line each, to compare with a PC or between builds.
      */
@@ -432,9 +508,14 @@ class GuestPolicy @Inject constructor(
     internal companion object {
         const val TAG = "GuestPolicy"
 
+        /** First line of the rules Bori Code writes into other CLIs' own instruction files. */
+        const val RULES_MARKER = "<!-- Written by Bori Code; delete this line to keep your own edits. -->"
+
         const val STATUS_SCRIPT = "/usr/local/bin/bori-status"
 
         const val BENCH_SCRIPT = "/usr/local/bin/bori-bench"
+
+        const val NET_SCRIPT = "/usr/local/bin/bori-net"
 
         const val GITHUB_SCRIPT = "/usr/local/bin/bori-github"
 

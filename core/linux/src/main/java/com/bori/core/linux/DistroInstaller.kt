@@ -1,5 +1,6 @@
 package com.bori.core.linux
 
+import android.os.Build
 import android.os.StatFs
 import android.system.Os
 import android.util.Log
@@ -76,6 +77,7 @@ sealed interface InstallState {
 @Singleton
 class DistroInstaller @Inject constructor(
     private val proot: ProotLauncher,
+    private val customClis: CustomCliStore,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
@@ -118,7 +120,10 @@ class DistroInstaller @Inject constructor(
     }
 
     /** Fresh install. The caller makes sure no terminal tab is using the distro. */
-    fun install(distroId: String) = launch(distroId) { distro -> installFresh(distro) }
+    fun install(distroId: String) {
+        if (DistroCatalog.get(distroId)?.offered != true) return
+        launch(distroId) { distro -> installFresh(distro) }
+    }
 
     /** Deletes the distro (sign-ins inside it included) and installs it again from scratch. */
     fun reinstall(distroId: String) = launch(distroId) { distro ->
@@ -374,17 +379,103 @@ class DistroInstaller @Inject constructor(
             val script = cli.installScript(distro)
             val code = runInGuest(distro.id, script)
             if (code != 0) error("${cli.title} install failed (exit $code). See the log below.")
+            checkCommands(distro.id, cli)
         }
 
-    /** Removes [cli]'s program. Its sign-in files stay in the guest; Bori Code doesn't touch them. */
+    /**
+     * Asks [cli] for its "/" commands (see [CliCommands]) and saves them for Chat's "/" list. A CLI
+     * without a list, or a check that fails, keeps Chat's built-in list; the install still succeeded.
+     */
+    private suspend fun checkCommands(distroId: String, cli: CodingCli) {
+        val program = cli.command.trim().substringBefore(' ').substringAfterLast('/')
+        val probes = CliCommands.probes(program)
+        if (probes.isEmpty()) return
+        appendLog("Checking ${cli.title}'s commands for Chat…")
+        for (probe in probes) {
+            coroutineContext.ensureActive()
+            val found = guestOutput(distroId, probe, timeoutSeconds = 90)?.let(CliCommands::parse) ?: continue
+            runCatching { CliCommands.save(proot.rootfs(distroId), program, found) }
+                .onSuccess { appendLog("Chat's \"/\" list now has ${found.size} of ${cli.title}'s commands") }
+                .onFailure { appendLog("Couldn't save ${cli.title}'s commands: ${it.message}") }
+            return
+        }
+        appendLog("${cli.title} didn't list its commands; Chat keeps its own list for it")
+    }
+
+    /**
+     * Removes [cli]'s program; for the user's own CLIs, also their entry. Its sign-in files stay in
+     * the guest; Bori Code doesn't touch them.
+     */
     fun removeCli(distroId: String, cli: CodingCli) =
         launch(distroId, cli.id, InstallState.Step.CliRemoving) { distro ->
             val code = runInGuest(distro.id, cli.uninstallScript)
-            if (code != 0) error("Removing ${cli.title} failed (exit $code)")
+            if (code != 0 && !cli.custom) error("Removing ${cli.title} failed (exit $code)")
+            if (cli.custom) customClis.remove(cli)
         }
 
-    /** [cli]'s installed version in [distroId], or null when it isn't installed. Quick, no job. */
-    suspend fun cliVersion(distroId: String, cli: CodingCli): String? = firstLine(distroId, cli.versionScript)
+    /**
+     * Each of [clis]' installed version in [distroId] (null when not installed), probed in one guest
+     * start. A CLI missing from the result couldn't be checked. Quick, no job.
+     */
+    suspend fun cliVersions(distroId: String, clis: List<CodingCli>): Map<String, String?> {
+        if (clis.isEmpty()) return emptyMap()
+        val out = guestOutput(distroId, CodingCli.versionsScript(clis), timeoutSeconds = 120) ?: return emptyMap()
+        return out.lineSequence()
+            .filter { '\t' in it }
+            .associate { line -> line.substringBefore('\t') to line.substringAfter('\t').trim().ifBlank { null } }
+    }
+
+    /**
+     * Copies a program file the user picked into [distroId]'s /usr/local/bin as [name] and makes it
+     * runnable. Returns a warning when it doesn't look like a Linux program or script for this
+     * device (it's kept anyway: the user asked for it, and Bori Code doesn't promise it runs).
+     */
+    suspend fun addProgramFile(distroId: String, name: String, input: InputStream): String? = withContext(Dispatchers.IO) {
+        require(CustomCliStore.SAFE_NAME.matches(name)) { "Use letters, numbers, dots or dashes for the name" }
+        val rootfs = proot.rootfs(distroId)
+        val binDir = File(rootfs, "usr/local/bin")
+        binDir.mkdirs()
+        // /usr/local/bin must be a real folder inside the rootfs, not a guest symlink out of it.
+        require(binDir.canonicalPath.startsWith(rootfs.canonicalPath + File.separator)) { "Can't write to /usr/local/bin" }
+        val target = File(binDir, name)
+        val tmp = File(binDir, ".$name.bori-tmp")
+        val head = ByteArray(20)
+        var headLen = 0
+        input.use { src ->
+            tmp.outputStream().use { dst ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = src.read(buf)
+                    if (n < 0) break
+                    if (headLen < head.size) {
+                        val take = minOf(n, head.size - headLen)
+                        System.arraycopy(buf, 0, head, headLen, take)
+                        headLen += take
+                    }
+                    dst.write(buf, 0, n)
+                }
+            }
+        }
+        Files.deleteIfExists(target.toPath())
+        if (!tmp.renameTo(target)) {
+            tmp.delete()
+            error("Couldn't save the program")
+        }
+        chmod(target, 0x1ED) // 0755
+        programWarning(head.copyOf(headLen))
+    }
+
+    /** Null for a `#!` script or an ELF program for this device's CPU; else what's wrong with it. */
+    private fun programWarning(head: ByteArray): String? {
+        if (head.size >= 2 && head[0] == '#'.code.toByte() && head[1] == '!'.code.toByte()) return null
+        val elf = head.size >= 20 && head[0] == 0x7F.toByte() && head[1] == 'E'.code.toByte() &&
+            head[2] == 'L'.code.toByte() && head[3] == 'F'.code.toByte()
+        if (!elf) return "This doesn't look like a Linux program or a script (#!), so it may not run."
+        // e_machine, little-endian, at offset 18: 0xB7 aarch64, 0x3E x86_64.
+        val machine = (head[18].toInt() and 0xFF) or ((head[19].toInt() and 0xFF) shl 8)
+        val wanted = if (Build.SUPPORTED_ABIS.firstOrNull() == "x86_64") 0x3E else 0xB7
+        return if (machine == wanted) null else "This program is built for another kind of CPU, so it likely won't run."
+    }
 
     /**
      * The GitHub account gh is signed in to in [distroId], or null. Reads only the account name
@@ -417,18 +508,27 @@ class DistroInstaller @Inject constructor(
     }
 
     /** The first line [script] prints in [distroId] when it exits 0 within 20 s, else null. */
-    private suspend fun firstLine(distroId: String, script: String): String? = withContext(Dispatchers.IO) {
+    private suspend fun firstLine(distroId: String, script: String): String? =
+        guestOutput(distroId, script)?.trim()?.lineSequence()?.firstOrNull()?.takeIf { it.isNotBlank() }
+
+    /** What [script] prints in [distroId] when it exits 0 within [timeoutSeconds], else null. */
+    private suspend fun guestOutput(distroId: String, script: String, timeoutSeconds: Long = 20): String? = withContext(Dispatchers.IO) {
         if (status(distroId) != DistroStatus.INSTALLED) return@withContext null
-        val output = StringBuilder()
-        val code = runCatching {
+        runCatching {
             val process = startGuest(distroId, script)
-            val reader = process.inputStream.bufferedReader()
-            val finished = process.waitFor(20, java.util.concurrent.TimeUnit.SECONDS)
-            if (!finished) process.destroy()
-            output.append(reader.readText())
-            if (finished) process.exitValue() else -1
-        }.getOrDefault(-1)
-        output.toString().trim().lineSequence().firstOrNull()?.takeIf { code == 0 && it.isNotBlank() }
+            try {
+                // Read on another thread so a full pipe can't stall the guest past the timeout.
+                val output = StringBuilder()
+                val reader = Thread { runCatching { output.append(process.inputStream.bufferedReader().readText()) } }
+                reader.start()
+                val finished = process.waitFor(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)
+                if (!finished) process.destroy()
+                reader.join(2_000)
+                output.toString().takeIf { finished && process.exitValue() == 0 }
+            } finally {
+                process.destroy()
+            }
+        }.getOrNull()
     }
 
     private fun startGuest(distroId: String, script: String): Process =

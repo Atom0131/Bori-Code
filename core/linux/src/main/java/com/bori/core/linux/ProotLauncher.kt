@@ -28,6 +28,7 @@ data class HostCommand(
 @Singleton
 class ProotLauncher @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val network: GuestNetwork,
 ) {
     private val libDir: String get() = context.applicationInfo.nativeLibraryDir
 
@@ -121,6 +122,8 @@ class ProotLauncher @Inject constructor(
         guestEnv: Map<String, String> = emptyMap(),
     ): HostCommand {
         val rootfs = rootfs(distroId)
+        // The guest resolves names itself: give it the phone's DNS (and keep it current).
+        network.prepare(rootfs) { installedDistros().map(::rootfs) }
         val tmp = File(linuxDir, "tmp").apply { mkdirs() }
         val proot = "$libDir/libproot.so"
 
