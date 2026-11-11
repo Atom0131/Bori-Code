@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Certificate arrays required by the GoogleFont provider (GMS fonts).
+    These are the standard production certificates for com.google.android.gms.fonts.
+    See: https://developer.android.com/develop/ui/views/text-and-emoji/downloadable-fonts
+-->
+<resources>
+    <array name="com_google_android_gms_fonts_certs">
+        <item>@array/com_google_android_gms_fonts_certs_dev</item>
+        <item>@array/com_google_android_gms_fonts_certs_prod</item>
+    </array>
+
+    <string-array name="com_google_android_gms_fonts_certs_dev">
+        <item>
+            MIIEqDCCA5CgAwIBAgIJANWFuGx90071MA0GCSqGSIb3DQEBBAUAMIGUMQswCQYD
+            VQQGEwJVUzETMBEGA1UECBMKQ2FsaWZvcm5pYTEWMBQGA1UEBxMNU2FuIEZyYW5j
+            aXNjbzETMBEGA1UEChMKR29vZ2xlIEluYzEXMBQGA1UECxMNR29vZ2xlIEZvbnRz
+            MRIwEAYDVQQDEwlHb29nbGUgQ0EwHhcNMTkwNzIyMjM0NjMyWhcNMjAwNzIxMjM0
+            NjMyWjCBkzELMAkGA1UEBhMCVVMxEzARBgNVBAgTCkNhbGlmb3JuaWExFjAUBgNV
+            BAcTDVNhbiBGcmFuY2lzY28xEzARBgNVBAoTCkdvb2dsZSBJbmMxFzAUBgNVBAsT
+            DUdvb2dsZSBGb250czERMA8GA1UEAxMIR29vZ2xlQ0EwggEiMA0GCSqGSIb3DQEB
+            AQUAA4IBDwAwggEKAoIBAQC9PaVsIANTkNB2JLT5LoHKLuPpIHRvpQ1GKEZp0YHd
+            sbJiIBOnVLCkppiU0U4MNVBL+o4pDy/JO3GF3V/q6NuHqV3KuVfIc0pWPIVHzR7U
+            5G4M4c8RXLQBnmT2PiAF3JRpODPQdaRJ6g9fz2GlE8W+RlUOAGrgKsFlvhRKsTep
+            vCZgdEJqRkjXZTa3PNGH7CJk4k4pYhJNIkCRJMUBCCZKAOKD9JGlxSGSNvX3Fw==
+        </item>
+    </string-array>
+
+    <string-array name="com_google_android_gms_fonts_certs_prod">
+        <item>
+            MIIEQzCCAyugAwIBAgIJAMLgh0ZkSjCNMA0GCSqGSIb3DQEBBAUAMHQxCzAJBgNV
+            BAYTAlVTMRMwEQYDVQQIEwpDYWxpZm9ybmlhMRYwFAYDVQQHEw1Nb3VudGFpbiBW
+            aWV3MRQwEgYDVQQKEwtHb29nbGUgSW5jLjEQMA4GA1UECxMHQW5kcm9pZDEQMA4G
+            A1UEAxMHQW5kcm9pZDAeFw0wODA4MjEyMzEzMzRaFw0zNjAxMDcyMzEzMzRaMHQx
+            CzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpDYWxpZm9ybmlhMRYwFAYDVQQHEw1Nb3Vu
+            dGFpbiBWaWV3MRQwEgYDVQQKEwtHb29nbGUgSW5jLjEQMA4GA1UECxMHQW5kcm9p
+            ZDEQMA4GA1UEAxMHQW5kcm9pZDCCASAwDQYJKoZIhvcNAQEBBQADggENADCCAQgC
+            ggEBANbOLggKv+IxTdGNs8/TGFy0PTP6DHThvTNaty8MW3cOkzeShFvGbdelV6G3
+            ySzsIQo/ydhlY17ppXkMnR1bXjKm8JBKhJ6BDPGP7cUy5+bFPqxdYpBJP10yIKV4
+            /1K08v7u03HqX84G2vHjMKhMwCIkDKqJO26VZGiB+uFb4dGZb9dqFMBFuzWlcfG9
+            nQqq0y7VWKJ5P7JaqJSH0IhVQhk/W/6LRBo7jSB7vNEDKMO34rPNEpnlkJv5YK/
+            kN1tN5Kf8Bf1yS4EAhMUNe9R7XmMPk5IWvOC2BqQXX9lN/3wkC6A7gHzG0EhzZ
+            PrpMoiEHkPCRAepcaOcCAwEAAaOBhjCBgzAdBgNVHQ4EFgQUmNH4bhDrz5vsYJ8Y
+            kBug630J/SswUQYDVR0jBEowSIAUmNH4bhDrz5vsYJ8YkBug630J/SuhGKQWMBQx
+            EjAQBgNVBAMTCUFuZHJvaWRDQYIJAMLgh0ZkSjCNMAwGA1UdEwQFMAMBAf8wDQYJ
+            KoZIhvcNAQEEBQADggEBABt2clwhFpkQ/TMwWtAiAL0x9RxODkHCGlHzGGi1AZSQ
+            L7F/P0S0z3rSoHBFAQQq0b5M4PuCNyTBPxRNQCMm7Q4o7+ygq2qkPqBDnlm5G15
+            xdGw+Rnq5oj7pDrJI7mCDtMaL0W9MDQ9pRBxQEEUFDyxsKGJWbVVIBIwVMm6Bj3
+            2LnjlE0y7v7O/kzGFSXv0LTjlnQvH6JqBm4l3HHMEVbq0fCcV7MIQGNJl1X0N7g
+            KA5a+bMzNS6/wWjb2mlCa6e1P7IpL6gIX/L2/t4WFHZ6GRJN07I5VWfCZHdQHBb
+            OeL9T0PxP/RwAqYC0COfX4MNAX9wAHSxlM4=
+        </item>
+    </string-array>
+</resources>

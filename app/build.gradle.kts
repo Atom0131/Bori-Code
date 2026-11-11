@@ -3,7 +3,6 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.hilt)
@@ -25,7 +24,7 @@ val githubOAuth = Properties().apply {
 
 android {
     namespace = "com.bori.app"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.bori.code"
@@ -92,11 +91,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
-    }
-
-    kotlinOptions {
-        jvmTarget = "11"
-        freeCompilerArgs += listOf("-Xskip-metadata-version-check")
     }
 
     buildFeatures {
@@ -173,6 +167,7 @@ dependencies {
     implementation(project(":core:build"))
     implementation(project(":core:terminal"))
     implementation(project(":core:keyboard"))
+    implementation(project(":core:theme"))
     // The Linux environment: full build only (see productFlavors).
     "fullImplementation"(project(":core:linux"))
 

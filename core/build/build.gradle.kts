@@ -20,10 +20,14 @@ import org.objectweb.asm.tree.TryCatchBlockNode
 
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
 }
+
+// Gradle 9 removed Project.exec; copyBuildTools runs D8 and friends through ExecOperations instead
+// (same ExecSpec, same commands).
+interface InjectedExecOps { @get:javax.inject.Inject val execOps: org.gradle.process.ExecOperations }
+val execOps = objects.newInstance(InjectedExecOps::class.java).execOps
 
 // SDK versions the bundled tools come from. Pinned (not "latest installed") so every
 // machine produces the same assets; android {} below compiles against the same versions.
@@ -412,7 +416,7 @@ tasks.register("copyBuildTools") {
             temp.mkdirs()
 
             // 1. Generate .dex files into temp directory
-            exec {
+            execOps.exec {
                 commandLine(
                     javaExe, "-cp", sdkD8Jar.absolutePath,
                     "com.android.tools.r8.D8",
@@ -448,7 +452,7 @@ tasks.register("copyBuildTools") {
 
         // Pre-dex d8.jar with desugaring + --lib so invoke-custom lambdas are converted to
         // concrete inner classes — Android's LambdaMetafactory has a different signature than JVM's.
-        exec {
+        execOps.exec {
             commandLine(
                 javaExe, "-cp", sdkD8Jar.absolutePath,
                 "com.android.tools.r8.D8",
@@ -500,7 +504,7 @@ tasks.register("copyBuildTools") {
         logger.lifecycle("Copied kotlin-stdlib from ${stdlibSrc.name}")
 
         // Pre-dex kotlin-stdlib so it can be loaded by PathClassLoader alongside kotlinc.
-        exec {
+        execOps.exec {
             commandLine(
                 javaExe, "-cp", sdkD8Jar.absolutePath,
                 "com.android.tools.r8.D8",
@@ -533,7 +537,7 @@ tasks.register("copyBuildTools") {
         // Pre-dex swing-stubs so the on-device compiler can load javax.swing.* classes that
         // the IntelliJ platform references (e.g. HTMLEditorKit$ParserCallback).
         val swingStubsSrc = file("stubs/swing-stubs.jar")
-        exec {
+        execOps.exec {
             commandLine(
                 javaExe, "-cp", sdkD8Jar.absolutePath,
                 "com.android.tools.r8.D8",
@@ -548,7 +552,7 @@ tasks.register("copyBuildTools") {
         // org.jetbrains:annotations — needed by Kotlin compiler codegen when emitting
         // @Nullable/@NotNull annotations on generated method parameters on Android.
         val annotationsSrc = artifacts.first { it.name == "annotations" }.file
-        exec {
+        execOps.exec {
             commandLine(
                 javaExe, "-cp", sdkD8Jar.absolutePath,
                 "com.android.tools.r8.D8",
@@ -562,7 +566,7 @@ tasks.register("copyBuildTools") {
 
         // kotlinx-coroutines: Kotlin 2.x's compiler (incremental compilation) needs it at run time.
         val coroutinesSrc = artifacts.first { it.name == "kotlinx-coroutines-core-jvm" }.file
-        exec {
+        execOps.exec {
             commandLine(
                 javaExe, "-cp", sdkD8Jar.absolutePath,
                 "com.android.tools.r8.D8",
@@ -592,7 +596,7 @@ tasks.register("copyBuildTools") {
             logger.lifecycle("Pre-dexed $assetName")
         }
         // KSP's own runtime dependencies (kotlinx-serialization).
-        exec {
+        execOps.exec {
             commandLine(
                 listOf(javaExe, "-cp", sdkD8Jar.absolutePath, "com.android.tools.r8.D8",
                     "--output", File(assetsDir, "ksp-deps-dex.jar").absolutePath,
@@ -629,7 +633,7 @@ tasks.register("copyBuildTools") {
                 zos.closeEntry()
             }
         }
-        exec {
+        execOps.exec {
             commandLine(
                 javaExe, "-cp", sdkD8Jar.absolutePath,
                 "com.android.tools.r8.D8",
@@ -652,7 +656,7 @@ tasks.register("copyBuildTools") {
                 zos.closeEntry()
             }
         }
-        exec {
+        execOps.exec {
             commandLine(
                 javaExe, "-cp", sdkD8Jar.absolutePath,
                 "com.android.tools.r8.D8",
@@ -734,7 +738,7 @@ tasks.register("copyBuildTools") {
         // B. Pre-dex the fat JAR → classes2.dex (on-device: library DEX, no D8 at runtime)
         val androidxDexOutDir = File(androidxWorkDir, "androidx_dex")
         androidxDexOutDir.mkdirs()
-        exec {
+        execOps.exec {
             commandLine(
                 javaExe, "-cp", sdkD8Jar.absolutePath,
                 "com.android.tools.r8.D8",
@@ -814,7 +818,7 @@ tasks.register("copyBuildTools") {
                 }
             }
 
-            exec {
+            execOps.exec {
                 commandLine(
                     aapt2Exe.absolutePath,
                     "compile",
@@ -905,9 +909,25 @@ afterEvaluate {
     tasks.named("preBuild") { dependsOn("copyBuildTools") }
 }
 
+// This module's own code is still compiled by Kotlin 2.0.21, the compiler it was written and tested
+// with: Kotlin 2.3 (the rest of the app) turns BuildEngine.runBuild into a JVM method over the 64 KB
+// limit. Unrelated to kotlin-compiler-asset, the compiler bundled for building on the phone.
+kotlin {
+    @OptIn(org.jetbrains.kotlin.buildtools.api.ExperimentalBuildToolsApi::class,
+        org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi::class)
+    compilerVersion.set(libs.versions.kotlin.compiler.asset.get())
+    compilerOptions {
+        // core:project and the stdlib on the classpath are Kotlin 2.3.
+        freeCompilerArgs.add("-Xskip-metadata-version-check")
+    }
+}
+
 android {
     namespace = "com.bori.core.build"
-    compileSdk = pinnedCompileSdk
+    // The module's own code compiles against 37 (AGP 9: :core:project and its libraries, e.g. materialkolor, ask for it).
+    // The bundled android-stubs.jar still comes from pinnedCompileSdk; that pin is what matters for
+    // what users' projects compile against on the phone.
+    compileSdk = 37
     buildToolsVersion = pinnedBuildTools
 
     defaultConfig {
@@ -917,10 +937,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
-    }
-
-    kotlinOptions {
-        jvmTarget = "11"
     }
 
     packaging {
