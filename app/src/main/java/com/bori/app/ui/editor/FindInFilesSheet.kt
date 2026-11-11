@@ -1,5 +1,6 @@
 ﻿package com.bori.app.ui.editor
 
+import com.bori.theme.util.BoriSheet
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -57,8 +58,8 @@ fun FindInFilesSheet(
     var caseSensitive by rememberSaveable { mutableStateOf(false) }
     var useRegex by rememberSaveable { mutableStateOf(false) }
 
-    ModalBottomSheet(
-        onDismissRequest = {
+    BoriSheet(
+        onDismiss = {
             viewModel.clear()
             onDismiss()
         },

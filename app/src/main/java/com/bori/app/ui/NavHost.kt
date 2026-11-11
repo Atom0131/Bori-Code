@@ -1,5 +1,18 @@
 ﻿package com.bori.app.ui
 
+import com.bori.theme.components.CrystalBar
+import com.bori.theme.components.CrystalBarEdge
+import com.bori.theme.components.CrystalNavIndicator
+import com.bori.theme.components.crystalChromeSurface
+import com.bori.theme.components.crystalNavItemColors
+import com.bori.theme.components.crystalNavRailItemColors
+import com.bori.theme.components.crystalScaffoldColor
+import com.bori.theme.components.crystalScaffoldContentColor
+import com.bori.theme.components.isCrystal
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.fillMaxHeight
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -372,6 +385,12 @@ fun BoriNavHost(
                             showTutorialCard = hasDismissedTutorial == false,
                             onStartTutorial = { tutorialVm.startTutorial() },
                             onDismissTutorial = { tutorialVm.dismiss() },
+                            onOpenTerminal = { onTab("terminal") },
+                            // An agent started from Chat runs behind it: Chat takes the whole screen.
+                            onChatFullScreen = {
+                                if (workspace) workspaceMax = Maximized.CHAT
+                                lastSide = WorkspaceSide.CHAT
+                            },
                         )
                     },
                     editor = { editorScreen() },
@@ -422,6 +441,9 @@ fun BoriNavHost(
     CompositionLocalProvider(LocalWindowLayout provides windowLayout, LocalAppChrome provides appChrome) {
         Scaffold(
             contentWindowInsets = WindowInsets(0),
+            // Transparent under Crystal so the theme's colour field shows behind every screen.
+            containerColor = crystalScaffoldColor(),
+            contentColor = crystalScaffoldContentColor(),
         ) { innerPadding ->
             // One tree for every width, so folding never rebuilds the screens below: only the
             // rail (unfolded) or the bottom bar (phone, cover screen) comes and goes around them.
@@ -431,17 +453,36 @@ fun BoriNavHost(
                     .fillMaxSize()
                     .padding(innerPadding),
             ) {
-                if (!compact && !fullScreen) NavigationRail {
-                    Spacer(Modifier.weight(1f))
-                    navTabs.forEach { tab ->
-                        NavigationRailItem(
-                            selected = isSelected(tab.route),
-                            onClick = { onTab(tab.route) },
-                            icon = { TabIcon(tab, isSelected(tab.route)) },
-                            label = { Text(tab.label) },
-                        )
+                if (!compact && !fullScreen) {
+                    // As in the habit tracker: the rail is chrome fixed to the edge (no rim), with a
+                    // hairline seam under Crystal; the flat styles separate it by tone.
+                    val railLine = if (isCrystal()) MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f) else Color.Transparent
+                    NavigationRail(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .crystalChromeSurface()
+                            .drawWithContent {
+                                drawContent()
+                                if (railLine != Color.Transparent) {
+                                    val x = size.width - 0.5.dp.toPx()
+                                    drawLine(railLine, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.dp.toPx())
+                                }
+                            },
+                        containerColor = Color.Transparent,
+                    ) {
+                        Spacer(Modifier.weight(1f))
+                        navTabs.forEach { tab ->
+                            val selected = isSelected(tab.route)
+                            NavigationRailItem(
+                                selected = selected,
+                                onClick = { onTab(tab.route) },
+                                icon = { CrystalNavIndicator(selected = selected) { TabIcon(tab, selected) } },
+                                label = { Text(tab.label) },
+                                colors = crystalNavRailItemColors(),
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
                     }
-                    Spacer(Modifier.weight(1f))
                 }
                 Column(
                     modifier = Modifier
@@ -468,14 +509,20 @@ fun BoriNavHost(
                         // and the nav bar frame-synced: no hop, no gap.
                         CollapsingBottomBar {
                             tutorial()
-                            NavigationBar {
-                                navTabs.forEach { tab ->
-                                    NavigationBarItem(
-                                        selected = isSelected(tab.route),
-                                        onClick = { onTab(tab.route) },
-                                        icon = { TabIcon(tab, isSelected(tab.route)) },
-                                        label = { Text(tab.label) },
-                                    )
+                            // CrystalBar is the fill in every style (glass under Crystal), so the
+                            // NavigationBar itself stays transparent, as in the habit tracker.
+                            CrystalBar(dividerEdge = CrystalBarEdge.Top) {
+                                NavigationBar(containerColor = Color.Transparent) {
+                                    navTabs.forEach { tab ->
+                                        val selected = isSelected(tab.route)
+                                        NavigationBarItem(
+                                            selected = selected,
+                                            onClick = { onTab(tab.route) },
+                                            icon = { CrystalNavIndicator(selected = selected) { TabIcon(tab, selected) } },
+                                            label = { Text(tab.label) },
+                                            colors = crystalNavItemColors(),
+                                        )
+                                    }
                                 }
                             }
                         }

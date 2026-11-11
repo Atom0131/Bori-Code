@@ -1,5 +1,12 @@
 package com.bori.app.ui.editor
 
+import com.bori.app.ui.common.GlassCard
+import com.bori.theme.util.BoriAlertDialog
+import com.bori.theme.util.BoriDropdownMenu
+import com.bori.theme.components.CrystalBar
+import com.bori.theme.components.crystalTopAppBarColors
+import com.bori.theme.components.crystalScaffoldContentColor
+import com.bori.theme.components.crystalScaffoldColor
 import com.bori.app.ui.common.ShellContentInsets
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.imePadding
@@ -245,7 +252,7 @@ fun EditorScreen(
 
     // ── Dialogs ───────────────────────────────────────────────────────────────
     if (showPermissionDialog) {
-        AlertDialog(
+        BoriAlertDialog(
             onDismissRequest = { showPermissionDialog = false },
             title = { Text("Storage Access Required") },
             text = {
@@ -277,7 +284,7 @@ fun EditorScreen(
         when (currentAction) {
             ContextMenuAction.NEW_FILE, ContextMenuAction.NEW_FOLDER -> {
                 val isFile = currentAction == ContextMenuAction.NEW_FILE
-                AlertDialog(
+                BoriAlertDialog(
                     onDismissRequest = { contextMenuAction = null },
                     title = { Text(if (isFile) "New File" else "New Folder") },
                     text = {
@@ -308,7 +315,7 @@ fun EditorScreen(
                 )
             }
             ContextMenuAction.RENAME -> {
-                AlertDialog(
+                BoriAlertDialog(
                     onDismissRequest = { contextMenuAction = null },
                     title = { Text("Rename") },
                     text = {
@@ -336,7 +343,7 @@ fun EditorScreen(
                 )
             }
             ContextMenuAction.DELETE -> {
-                AlertDialog(
+                BoriAlertDialog(
                     onDismissRequest = { contextMenuAction = null },
                     title = { Text("Delete") },
                     text = { Text("Delete \"${currentNode.name}\"? This cannot be undone.") },
@@ -443,11 +450,12 @@ fun EditorScreen(
         )
     } ?: run { lockSaveAsk = false }
     Scaffold(
-        contentWindowInsets = ShellContentInsets,
+        contentWindowInsets = ShellContentInsets, containerColor = crystalScaffoldColor(), contentColor = crystalScaffoldContentColor(),
         topBar = {
             val errorCount = diagnostics.count { it.severity == com.bori.core.build.model.Diagnostic.Severity.ERROR }
             Column {
-            TopAppBar(
+            CrystalBar { TopAppBar(
+                colors = crystalTopAppBarColors(),
                 title = {
                     Box {
                         Row(
@@ -466,7 +474,7 @@ fun EditorScreen(
                             )
                             Icon(Icons.Default.ArrowDropDown, contentDescription = "Switch project")
                         }
-                        DropdownMenu(expanded = projectMenu, onDismissRequest = { projectMenu = false }) {
+                        BoriDropdownMenu(expanded = projectMenu, onDismissRequest = { projectMenu = false }) {
                             allProjects.forEach { project ->
                                 DropdownMenuItem(
                                     text = { Text(project.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -573,7 +581,7 @@ fun EditorScreen(
                             IconButton(onClick = { overflowMenu = true }) {
                                 Icon(Icons.Default.MoreVert, contentDescription = "More")
                             }
-                            DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
+                            BoriDropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
                                 DropdownMenuItem(
                                     text = { Text("Find in files") },
                                     leadingIcon = { Icon(Icons.Default.Search, null) },
@@ -612,7 +620,7 @@ fun EditorScreen(
                         }
                     }
                 },
-            )
+            ) }
             com.bori.app.ui.common.AgentLockBanner(otherAgentLock)
             }
         },
@@ -767,7 +775,7 @@ fun EditorScreen(
 
                                     // Context menu for Explorer
                                     if (activeSidebarPanel == SidebarPanel.EXPLORER) {
-                                        DropdownMenu(
+                                        BoriDropdownMenu(
                                             expanded = contextMenuNode != null && contextMenuAction == null,
                                             onDismissRequest = { contextMenuNode = null },
                                         ) {
@@ -1239,8 +1247,9 @@ private fun ProjectPickerContent(
 
     Scaffold(
 
-        contentWindowInsets = ShellContentInsets,
-        topBar = { TopAppBar(title = { Text("Open Project") }) },
+        contentWindowInsets = ShellContentInsets, containerColor = crystalScaffoldColor(), contentColor = crystalScaffoldContentColor(),
+        topBar = { CrystalBar { TopAppBar(
+                colors = crystalTopAppBarColors(),title = { Text("Open Project") }) } },
         floatingActionButton = {
             FloatingActionButton(onClick = { showNewProjectDialog = true }) {
                 Icon(Icons.Default.Add, contentDescription = "New project")
@@ -1287,13 +1296,7 @@ private fun ProjectPickerContent(
                         SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(project.createdAt))
                     }
                     val language = if (project.template.name.endsWith("_KOTLIN")) "Kotlin" else "Java"
-                    Card(
-                        onClick = { onSelect(project) },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        ),
-                    ) {
+                    GlassCard(onClick = { onSelect(project) }, modifier = Modifier.fillMaxWidth(), fill = MaterialTheme.colorScheme.surfaceContainer) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),

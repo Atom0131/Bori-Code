@@ -2,8 +2,11 @@
 
 import com.bori.core.security.AiProvider
 import com.bori.core.build.model.CompilerPerformanceProfile
+import com.bori.theme.settings.BoriThemeSettings
+import com.bori.theme.settings.ThemeStyle
 
-enum class ThemeMode(val label: String) { SYSTEM("System"), LIGHT("Light"), DARK("Dark") }
+/** Bori Code's look for a new install: Crystal, like the rest of the Bori family. */
+val DefaultBoriCodeTheme = BoriThemeSettings(themeStyle = ThemeStyle.CRYSTAL)
 
 data class UserPreferences(
     val chatProvider: AiProvider = AiProvider.ANTHROPIC,
@@ -20,10 +23,10 @@ data class UserPreferences(
     val hasSeenOnboarding: Boolean = false,
     val hasDismissedTutorial: Boolean = false,
     val experimentalFeaturesEnabled: Boolean = false,
-    /** ARGB color (0xAARRGGBB) for the user's chat bubbles and send button. */
-    val chatBubbleColor: Long = 0xFF1A56DB,
-    /** Light, dark, or follow the system. */
-    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    /** Every theme choice (style, light/dark, accent, Crystal's field and glass, Borikén). */
+    val theme: BoriThemeSettings = DefaultBoriCodeTheme,
+    /** The user's saved colours, shared by the accent and room pickers (newest first, up to six). */
+    val customColors: List<Int?> = emptyList(),
     /** Model IDs last fetched from each provider's models endpoint. Absent = never fetched. */
     val cachedModels: Map<AiProvider, List<String>> = emptyMap(),
 )

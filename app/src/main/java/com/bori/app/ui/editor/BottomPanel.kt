@@ -1,5 +1,6 @@
 package com.bori.app.ui.editor
 
+import com.bori.theme.util.BoriDropdownMenu
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -219,7 +220,7 @@ private fun ProblemsContent(
                                 tint = MaterialTheme.colorScheme.primary,
                             )
                         }
-                        DropdownMenu(expanded = showImportMenu, onDismissRequest = { showImportMenu = false }) {
+                        BoriDropdownMenu(expanded = showImportMenu, onDismissRequest = { showImportMenu = false }) {
                             importOptions.forEach { fqn ->
                                 DropdownMenuItem(
                                     text = { Text(fqn, style = MaterialTheme.typography.bodySmall) },

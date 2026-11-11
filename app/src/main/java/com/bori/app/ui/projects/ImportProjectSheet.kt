@@ -1,5 +1,6 @@
 ﻿package com.bori.app.ui.projects
 
+import com.bori.theme.util.BoriSheet
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -53,7 +54,7 @@ fun ImportProjectSheet(
     val sheetState = rememberModalBottomSheetState()
     val isLoading = importState is ImportState.Loading
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    BoriSheet(onDismiss = onDismiss, sheetState = sheetState) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()

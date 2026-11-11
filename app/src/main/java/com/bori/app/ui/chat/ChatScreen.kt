@@ -1,8 +1,13 @@
 package com.bori.app.ui.chat
 
+import com.bori.theme.util.BoriSheet
+import com.bori.theme.util.BoriAlertDialog
+import com.bori.theme.util.BoriDropdownMenu
+import com.bori.theme.components.crystalListItemColors
+import com.bori.theme.components.crystalAssistChipColors
+import com.bori.theme.components.crystalFilterChipColors
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.BorderStroke
-import com.bori.app.ui.theme.isAppInDarkTheme
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
@@ -133,11 +138,6 @@ import dev.jeziellago.compose.markdowntext.MarkdownText
 import kotlinx.coroutines.launch
 
 // ---- Palette ----
-private val BgCream           = Color(0xFFF9F8F3)
-private val UserBubbleColor   = Color(0xFF1A56DB)
-private val AssistantBubbleBg = Color(0xFFF2F2F7)
-private val SubtleGray        = Color(0xFF64748B)
-private val BorderGray        = Color(0xFFE2E8F0)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -146,8 +146,22 @@ fun ChatScreen(
     showTutorialCard: Boolean = false,
     onStartTutorial: () -> Unit = {},
     onDismissTutorial: () -> Unit = {},
+    /** Shows the Terminal (unfolded: beside the chat), for a terminal agent's approval. */
+    onOpenTerminal: () -> Unit = {},
+    /** Gives Chat the whole screen (unfolded); asked for when an agent is started from Chat. */
+    onChatFullScreen: () -> Unit = {},
 ) {
-    val messages by viewModel.messages.collectAsState()
+    val terminalTargets by viewModel.terminalTargets.collectAsState()
+    val startableAgents by viewModel.startableAgents.collectAsState()
+    LaunchedEffect(Unit) { viewModel.refreshStartableAgents() }
+    LaunchedEffect(Unit) { viewModel.chatFullScreen.collect { onChatFullScreen() } }
+    val terminalTarget by viewModel.terminalTarget.collectAsState()
+    val terminalMessages by viewModel.terminalMessages.collectAsState()
+    val terminalScreen by viewModel.terminalScreen.collectAsState()
+    val agentCommands by viewModel.agentCommands.collectAsState()
+    val boriMessages by viewModel.messages.collectAsState()
+    // Sending to a CLI in a terminal tab: its conversation instead of Bori's.
+    val messages = if (terminalTarget != null) terminalMessages else boriMessages
     val isLoading by viewModel.isLoading.collectAsState()
     val providerLabel by viewModel.activeProviderLabel.collectAsState()
     val pendingApproval by viewModel.pendingApproval.collectAsState()
@@ -255,17 +269,20 @@ fun ChatScreen(
         }
     }
 
-    val slashSuggestions = remember(input) {
-        val word = input.substringBefore(' ')
-        if (!word.startsWith("/") || word.length < 1) emptyList()
-        else viewModel.slashCommandNames.filter { it.startsWith(word, ignoreCase = true) }
+    // The "/" list: the commands of the agent Chat sends to, while the first word is being typed.
+    val slashWord = input.takeIf { it.startsWith("/") && ' ' !in it && '\n' !in it }
+    val slashOpen = slashWord != null
+    LaunchedEffect(slashOpen, terminalTarget?.tabId) { if (slashOpen) viewModel.refreshAgentCommands() }
+    val slashSuggestions = remember(slashWord, agentCommands) {
+        if (slashWord == null) emptyList()
+        else com.bori.app.terminal.AgentCommands.filter(agentCommands, slashWord)
+            .filterNot { it.name.equals(slashWord, ignoreCase = true) }
     }
 
-    val darkTheme = isAppInDarkTheme()
     val bgColor = BoriTheme.colors.chatBackground
     // User-selectable bubble color (ARGB long persisted in prefs). Threaded into the user
     // message bubbles and the send button so the chat accent follows the user's choice.
-    val bubbleColor = Color(userPrefs.chatBubbleColor)
+    val bubbleColor = MaterialTheme.colorScheme.primary
 
     if (showCommandsSheet) {
         val slashCommandDescriptions = remember {
@@ -282,8 +299,8 @@ fun ChatScreen(
                 "/docs" to "Write KDoc documentation",
             )
         }
-        ModalBottomSheet(
-            onDismissRequest = { showCommandsSheet = false },
+        BoriSheet(
+            onDismiss = { showCommandsSheet = false },
             sheetState = commandsSheetState,
         ) {
             Text(
@@ -296,6 +313,7 @@ fun ChatScreen(
                 items(slashCommandDescriptions.size) { index ->
                     val (cmd, desc) = slashCommandDescriptions[index]
                     ListItem(
+                        colors = crystalListItemColors(),
                         headlineContent = {
                             Text(cmd, style = MaterialTheme.typography.bodyMedium)
                         },
@@ -343,8 +361,8 @@ fun ChatScreen(
     }
 
     if (showModelMenu) {
-        ModalBottomSheet(
-            onDismissRequest = { showModelMenu = false },
+        BoriSheet(
+            onDismiss = { showModelMenu = false },
             sheetState = modelSheetState,
         ) {
             Text(
@@ -402,6 +420,7 @@ fun ChatScreen(
                             // Free-tier note from the catalog (e.g. Gemini 3.x "needs billing").
                             val meta = com.bori.core.ai.model.ModelCatalog.model(provider, model)
                             ListItem(
+                                colors = crystalListItemColors(),
                                 headlineContent = {
                                     Text(
                                         model.substringAfterLast('/').ifEmpty { model },
@@ -454,7 +473,7 @@ fun ChatScreen(
     }
 
     if (showClearConfirmDialog) {
-        AlertDialog(
+        BoriAlertDialog(
             onDismissRequest = { showClearConfirmDialog = false },
             title = { Text("Clear conversation?") },
             text = { Text("All messages in this conversation will be deleted. This cannot be undone.") },
@@ -499,7 +518,6 @@ fun ChatScreen(
         topBar = {
             BoriTopBar(
                 title = agentShortLabel(userPrefs.chatProvider),
-                containerColor = bgColor,
                 titleContent = {
                     // The agent you're talking to; tap to switch.
                     Row(
@@ -535,7 +553,7 @@ fun ChatScreen(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        DropdownMenu(
+                        BoriDropdownMenu(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false },
                         ) {
@@ -608,9 +626,11 @@ fun ChatScreen(
             }
             if (userPrefs.chatProvider == AiProvider.LOCAL_GEMMA) {
                 when (val s = gemmaInitState) {
-                    is InferenceState.Loading -> Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
+                    is InferenceState.Loading -> ChatPanel(
                         modifier = Modifier.fillMaxWidth(),
+                        fill = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        tier = PanelTier.TILE,
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                             Text(
@@ -621,9 +641,11 @@ fun ChatScreen(
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
                         }
                     }
-                    is InferenceState.Error -> Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
+                    is InferenceState.Error -> ChatPanel(
                         modifier = Modifier.fillMaxWidth(),
+                        fill = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        tier = PanelTier.TILE,
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -643,7 +665,11 @@ fun ChatScreen(
                     else -> {}
                 }
             }
-            if (messages.isEmpty()) {
+            if (terminalTarget != null && !terminalTarget!!.readable) {
+                TerminalScreenMirror(terminalTarget!!, terminalScreen, Modifier.weight(1f).fillMaxWidth())
+            } else if (messages.isEmpty() && terminalTarget != null) {
+                TerminalTargetEmpty(terminalTarget!!, Modifier.weight(1f).fillMaxWidth())
+            } else if (messages.isEmpty()) {
                 LazyColumn(modifier = Modifier.weight(1f)) {
                     item {
                         EmptyStateContent(
@@ -729,33 +755,28 @@ fun ChatScreen(
                     )
                 }
                 if (slashSuggestions.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp)
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        slashSuggestions.forEach { cmd ->
-                            SuggestionChip(
-                                onClick = { input = "$cmd " },
-                                label = { Text(cmd, style = MaterialTheme.typography.labelMedium) },
-                            )
-                        }
-                    }
+                    SlashCommandList(
+                        commands = slashSuggestions,
+                        agent = terminalTarget?.agent ?: "Bori agent",
+                        onPick = { input = it.name + " " },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    )
                 }
                 if (atMentionSuggestions.isNotEmpty()) {
-                    Card(
+                    ChatPanel(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp)
                             .heightIn(max = 200.dp),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                    ) {
+                        fill = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        tier = PanelTier.CARD,
+                    ) { Column {
                         LazyColumn {
                             items(atMentionSuggestions) { path ->
                                 val name = path.substringAfterLast('/')
                                 ListItem(
+                                    colors = crystalListItemColors(),
                                     headlineContent = {
                                         Text(name, style = MaterialTheme.typography.bodySmall)
                                     },
@@ -780,7 +801,7 @@ fun ChatScreen(
                                 HorizontalDivider()
                             }
                         }
-                    }
+                    }}
                 }
                 if (pendingAttachments.isNotEmpty()) {
                     LazyRow(
@@ -816,14 +837,31 @@ fun ChatScreen(
                         }
                     }
                 }
-                val chipLabel = agentShortLabel(userPrefs.chatProvider)
+                if (terminalTargets.isNotEmpty() || startableAgents.isNotEmpty()) {
+                    TerminalTargetBar(
+                        targets = terminalTargets,
+                        chosen = terminalTarget,
+                        startable = startableAgents,
+                        onChoose = { viewModel.chooseTerminalTarget(it) },
+                        onOpenTerminal = { viewModel.showTargetInTerminal(); onOpenTerminal() },
+                        onStartMenu = { viewModel.refreshStartableAgents() },
+                        onStart = { agent ->
+                            // What's typed so far goes as the first message once the agent is ready.
+                            viewModel.startTerminalAgent(agent, input)
+                            input = ""
+                        },
+                    )
+                }
+                val chipLabel = terminalTarget?.agent ?: agentShortLabel(userPrefs.chatProvider)
                 PillInputBar(
                     input = input,
-                    isLoading = isLoading,
-                    pendingApproval = pendingApproval,
+                    // Bori's agent working doesn't stop a message to the terminal.
+                    isLoading = isLoading && terminalTarget == null,
+                    pendingApproval = pendingApproval.takeIf { terminalTarget == null },
                     showAttachMenu = showAttachMenu,
                     providerLabel = chipLabel,
                     modeLabel = when {
+                        terminalTarget != null -> null
                         isPlanMode -> "Plan"
                         isAskMode -> "Ask"
                         else -> null
@@ -856,7 +894,10 @@ fun ChatScreen(
                     onPickDocument = { documentPicker.launch("*/*") },
                     onAttachProject = { viewModel.attachProjectContext() },
                     onShowCommands = { showCommandsSheet = true },
-                    onProviderChipClick = { showModelMenu = true },
+                    // In terminal mode the agent is the one in that tab: the chip shows it in the terminal.
+                    onProviderChipClick = {
+                        if (terminalTarget != null) { viewModel.showTargetInTerminal(); onOpenTerminal() } else showModelMenu = true
+                    },
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                 )
             }
@@ -896,7 +937,7 @@ private fun EmptyStateContent(
         ) {
             Spacer(Modifier.size(16.dp))
             listOf("Fix a bug", "Explain code", "Add a feature").forEach { label ->
-                SuggestionChip(
+                SuggestionChip(colors = crystalAssistChipColors(), 
                     onClick = { onPromptClick(label) },
                     label = { Text(label, style = MaterialTheme.typography.bodyMedium) },
                 )
@@ -923,14 +964,12 @@ private fun TutorialPromptCard(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val darkTheme = isAppInDarkTheme()
-    Card(
+    ChatPanel(
         modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (darkTheme) Color(0xFF1E2A3A) else Color(0xFFEFF6FF),
-        ),
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (darkTheme) Color(0xFF2D4A6A) else Color(0xFFBFDBFE)),
-    ) {
+        fill = noticeColors(NoticeTone.INFO).fill,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tier = PanelTier.CARD,
+    ) { Column {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -964,7 +1003,7 @@ private fun TutorialPromptCard(
                 }
             }
         }
-    }
+    }}
 }
 
 
@@ -991,14 +1030,12 @@ private fun PillInputBar(
     modifier: Modifier = Modifier,
 ) {
     val canSend = input.isNotBlank() && pendingApproval == null && !isLoading
-    val darkTheme = isAppInDarkTheme()
-    val pillBg = if (darkTheme) Color(0xFF1E1D1C) else Color.White
-    val border = if (darkTheme) Color(0xFF3A3938) else BorderGray
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = pillBg,
-        shadowElevation = 6.dp,
+    val border = MaterialTheme.colorScheme.outlineVariant
+    ChatPanel(
         modifier = modifier.fillMaxWidth(),
+        fill = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tier = PanelTier.CARD,
     ) {
         Column {
             // ---- Text area ----
@@ -1021,7 +1058,7 @@ private fun PillInputBar(
                             Text(
                                 if (isLoading) "Thinking…" else "Ask me anything…",
                                 style = MaterialTheme.typography.bodyLarge,
-                                color = Color(0xFF94A3B8),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                         innerTextField()
@@ -1046,10 +1083,10 @@ private fun PillInputBar(
                             Icons.Default.Add,
                             contentDescription = "Attach",
                             modifier = Modifier.size(20.dp),
-                            tint = SubtleGray,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    DropdownMenu(
+                    BoriDropdownMenu(
                         expanded = showAttachMenu,
                         onDismissRequest = onAttachMenuDismiss,
                     ) {
@@ -1057,7 +1094,7 @@ private fun PillInputBar(
                             text = {
                                 Column {
                                     Text("Commands", style = MaterialTheme.typography.bodyMedium)
-                                    Text("/plan, /ask, /tutorial, /explain, /fix, /test, /refactor, /docs", style = MaterialTheme.typography.labelSmall, color = SubtleGray)
+                                    Text("/plan, /ask, /tutorial, /explain, /fix, /test, /refactor, /docs", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             },
                             leadingIcon = { Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(18.dp)) },
@@ -1067,7 +1104,7 @@ private fun PillInputBar(
                             text = {
                                 Column {
                                     Text("Image", style = MaterialTheme.typography.bodyMedium)
-                                    Text("JPEG, PNG, WebP, GIF", style = MaterialTheme.typography.labelSmall, color = SubtleGray)
+                                    Text("JPEG, PNG, WebP, GIF", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             },
                             leadingIcon = { Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp)) },
@@ -1077,7 +1114,7 @@ private fun PillInputBar(
                             text = {
                                 Column {
                                     Text("Document", style = MaterialTheme.typography.bodyMedium)
-                                    Text(".txt, .md, .kt, .java, .xml, .json, .kts, .py, .js, .ts, .html, .css", style = MaterialTheme.typography.labelSmall, color = SubtleGray)
+                                    Text(".txt, .md, .kt, .java, .xml, .json, .kts, .py, .js, .ts, .html, .css", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             },
                             leadingIcon = { Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(18.dp)) },
@@ -1087,7 +1124,7 @@ private fun PillInputBar(
                             text = {
                                 Column {
                                     Text("Project Context", style = MaterialTheme.typography.bodyMedium)
-                                    Text("Active project file tree", style = MaterialTheme.typography.labelSmall, color = SubtleGray)
+                                    Text("Active project file tree", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             },
                             leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp)) },
@@ -1106,7 +1143,7 @@ private fun PillInputBar(
                         providerLabel,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                         style = MaterialTheme.typography.labelMedium,
-                        color = SubtleGray,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 // Plan or Ask mode, when on; tap to go back to normal agent mode.
@@ -1139,10 +1176,10 @@ private fun PillInputBar(
                 Surface(
                     shape = CircleShape,
                     color = when {
-                        isLoading -> Color(0xFFEF4444)
+                        isLoading -> MaterialTheme.colorScheme.error
                         // sendColor = the user's chosen chat bubble color (threaded from prefs).
                         canSend   -> sendColor
-                        else      -> if (darkTheme) Color(0xFF2C2B2A) else Color(0xFFF1F5F9)
+                        else      -> MaterialTheme.colorScheme.surfaceContainerHighest
                     },
                     modifier = Modifier
                         .size(38.dp)
@@ -1158,14 +1195,14 @@ private fun PillInputBar(
                             Icon(
                                 Icons.Default.Stop,
                                 contentDescription = "Stop",
-                                tint = Color.White,
+                                tint = MaterialTheme.colorScheme.onError,
                                 modifier = Modifier.size(16.dp),
                             )
                         } else {
                             Icon(
                                 Icons.AutoMirrored.Filled.Send,
                                 contentDescription = "Send",
-                                tint = if (canSend) Color.White else Color(0xFFADB5BD),
+                                tint = if (canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                                 modifier = Modifier.size(16.dp),
                             )
                         }
@@ -1208,26 +1245,20 @@ private fun UserBubble(
             ),
         contentAlignment = Alignment.CenterEnd,
     ) {
-        Surface(
-            color = bubbleColor,
-            shape = RoundedCornerShape(
-                topStart = 18.dp,
-                topEnd = if (isFirstInGroup) 18.dp else 14.dp,
-                bottomStart = 18.dp,
-                bottomEnd = if (isLastInGroup) 4.dp else 14.dp,
-            ),
+        ChatPanel(
+            modifier = Modifier,
+            fill = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            tier = PanelTier.CARD,
         ) {
             Column {
                 Text(
                     text = content,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 )
-                Box(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
+                Box {
                     androidx.compose.material3.IconButton(
                         onClick = { clipboard.setText(AnnotatedString(content)) },
                         modifier = Modifier.size(32.dp),
@@ -1238,7 +1269,7 @@ private fun UserBubble(
                             modifier = Modifier.size(16.dp),
                             // White (semi-transparent) for contrast: plain gray was invisible
                             // on the colored user bubble.
-                            tint = Color.White.copy(alpha = 0.7f),
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
                         )
                     }
                 }
@@ -1250,7 +1281,6 @@ private fun UserBubble(
 @Composable
 private fun AssistantBubble(content: String, isFirstInGroup: Boolean = true, isLastInGroup: Boolean = true) {
     val clipboard = LocalClipboardManager.current
-    val bubbleBg = if (isAppInDarkTheme()) Color(0xFF2C2B2A) else AssistantBubbleBg
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1261,15 +1291,11 @@ private fun AssistantBubble(content: String, isFirstInGroup: Boolean = true, isL
             ),
         contentAlignment = Alignment.CenterStart,
     ) {
-        Surface(
-            color = bubbleBg,
-            shape = RoundedCornerShape(
-                topStart = if (isFirstInGroup) 4.dp else 14.dp,
-                topEnd = 18.dp,
-                bottomStart = if (isLastInGroup) 18.dp else 14.dp,
-                bottomEnd = 18.dp,
-            ),
+        ChatPanel(
             modifier = Modifier.fillMaxWidth(),
+            fill = MaterialTheme.colorScheme.surfaceContainer,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            tier = PanelTier.CARD,
         ) {
             Column {
                 MarkdownText(
@@ -1277,6 +1303,8 @@ private fun AssistantBubble(content: String, isFirstInGroup: Boolean = true, isL
                     modifier = Modifier.padding(
                         start = 14.dp, end = 14.dp, top = 10.dp, bottom = 4.dp,
                     ),
+                    style = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                    linkColor = MaterialTheme.colorScheme.primary,
                 )
                 Box(
                     modifier = Modifier.fillMaxWidth(),
@@ -1310,19 +1338,19 @@ private fun ToolResultBubble(content: String) {
             ?.let { m -> listOf(m.groupValues[1], m.groupValues[2]).filter { it.isNotBlank() }.joinToString(" · ") }
             ?: "Tool result"
     }
-    val toolBg = if (isAppInDarkTheme()) Color(0xFF2C2B2A) else Color(0xFFEEECE6)
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 2.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
-        Surface(
-            color = toolBg,
-            shape = RoundedCornerShape(12.dp),
+        ChatPanel(
             modifier = Modifier
                 .clickable { expanded = !expanded }
                 .fillMaxWidth(0.9f),
+            fill = MaterialTheme.colorScheme.surfaceContainerLow,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            tier = PanelTier.TILE,
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 Row(
@@ -1333,12 +1361,12 @@ private fun ToolResultBubble(content: String) {
                         Icons.Default.Info,
                         contentDescription = null,
                         modifier = Modifier.size(14.dp),
-                        tint = SubtleGray,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
                         label,
                         style = MaterialTheme.typography.labelSmall,
-                        color = SubtleGray,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
@@ -1348,7 +1376,7 @@ private fun ToolResultBubble(content: String) {
                         else Icons.Default.KeyboardArrowDown,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp),
-                        tint = SubtleGray,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (expanded) {
@@ -1369,24 +1397,23 @@ private fun ToolResultBubble(content: String) {
 
 @Composable
 private fun NoProjectBanner() {
-    val darkTheme    = isAppInDarkTheme()
-    val bannerBg     = if (darkTheme) Color(0xFF2A2518) else Color(0xFFFFF8E1)
-    val bannerBorder = if (darkTheme) Color(0xFF5A4B00) else Color(0xFFFFE082)
-    val bannerText   = if (darkTheme) Color(0xFFFFE082) else Color(0xFF5D4037)
-    Surface(
+    val notice       = noticeColors(NoticeTone.WARNING)
+    val bannerBg     = notice.fill
+    val bannerText   = notice.text
+    ChatPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = bannerBg,
-        border = BorderStroke(1.dp, bannerBorder),
+        fill = bannerBg,
+        contentColor = bannerText,
+        tier = PanelTier.TILE,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFFF8F00))
+            Icon(Icons.Default.Info, contentDescription = null, tint = notice.tint)
             Text(
                 text = "No project open. Pick one with the project chip at the top, or in Projects.",
                 style = MaterialTheme.typography.bodySmall,
@@ -1405,19 +1432,16 @@ private fun ApprovalCard(
     onAllowAll: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    val darkTheme  = isAppInDarkTheme()
-    val cardBg     = if (darkTheme) Color(0xFF1E1D1C) else Color.White
-    val cardBorder = if (darkTheme) Color(0xFF3A3938) else BorderGray
-    val deleteBg   = if (darkTheme) Color(0xFF3B1A1A) else Color(0xFFFFEBEE)
-    val deleteText = if (darkTheme) Color(0xFFEF9A9A) else Color(0xFFC62828)
-    val addBg      = if (darkTheme) Color(0xFF1A2F1A) else Color(0xFFE8F5E9)
-    val addText    = if (darkTheme) Color(0xFF81C784) else Color(0xFF2E7D32)
-    Surface(
+    val cardBg     = MaterialTheme.colorScheme.surfaceContainer
+    val deleteBg   = MaterialTheme.colorScheme.errorContainer
+    val deleteText = MaterialTheme.colorScheme.onErrorContainer
+    val addText    = BoriTheme.colors.diffAdded
+    val addBg      = addText.copy(alpha = 0.15f)
+    ChatPanel(
         modifier = modifier,
-        tonalElevation = 4.dp,
-        shape = MaterialTheme.shapes.medium,
-        color = cardBg,
-        border = BorderStroke(1.dp, cardBorder),
+        fill = cardBg,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tier = PanelTier.CARD,
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(
@@ -1437,7 +1461,7 @@ private fun ApprovalCard(
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontFamily = FontFamily.Monospace,
                         ),
-                        color = SubtleGray,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Box(
@@ -1519,7 +1543,7 @@ private fun ApprovalCard(
                 if (onAllowAll != null) FilledTonalButton(onClick = onAllowAll) { Text("Allow All") }
                 Button(
                     onClick = onAllow,
-                    colors = ButtonDefaults.buttonColors(containerColor = UserBubbleColor),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 ) { Text("Allow") }
                 OutlinedButton(onClick = onDeny) { Text("Deny") }
             }
@@ -1529,17 +1553,17 @@ private fun ApprovalCard(
 
 @Composable
 private fun AskModeBanner(aiName: String) {
-    val darkTheme = isAppInDarkTheme()
-    val bg     = if (darkTheme) Color(0xFF1F1535) else Color(0xFFF5F3FF)
-    val border = if (darkTheme) Color(0xFF4C3070) else Color(0xFFDDD6FE)
-    val tint   = if (darkTheme) Color(0xFFD8B4FE) else Color(0xFF7C3AED)
-    Surface(
+    val notice = noticeColors(NoticeTone.ASK)
+    val bg     = notice.fill
+    val border = notice.border
+    val tint   = notice.tint
+    ChatPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = bg,
-        border = BorderStroke(1.dp, border),
+        fill = bg,
+        contentColor = tint,
+        tier = PanelTier.TILE,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1576,10 +1600,9 @@ private fun MultiQuestionCard(
     onSubmit: (List<String>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val darkTheme = isAppInDarkTheme()
-    val cardBg  = if (darkTheme) Color(0xFF1E1D1C) else Color.White
-    val inputBg = if (darkTheme) Color(0xFF2C2B2A) else Color(0xFFF8F8F8)
-    val tint    = if (darkTheme) Color(0xFFD8B4FE) else Color(0xFF7C3AED)
+    val cardBg  = MaterialTheme.colorScheme.surfaceContainer
+    val inputBg = MaterialTheme.colorScheme.surfaceContainerHighest
+    val tint    = MaterialTheme.colorScheme.tertiary
 
     // Per-question state: selected option(s) and free-text "Other".
     val selected = remember(pending) { pending.items.map { mutableStateListOf<String>() } }
@@ -1591,12 +1614,11 @@ private fun MultiQuestionCard(
     }
     val allAnswered = pending.items.indices.all { answerFor(it).isNotBlank() }
 
-    Surface(
+    ChatPanel(
         modifier = modifier,
-        tonalElevation = 4.dp,
-        shape = MaterialTheme.shapes.medium,
-        color = cardBg,
-        border = BorderStroke(1.dp, BorderGray),
+        fill = cardBg,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tier = PanelTier.CARD,
     ) {
         Column(
             modifier = Modifier
@@ -1637,7 +1659,7 @@ private fun MultiQuestionCard(
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         item.options.forEach { option ->
                             val isSel = option in selected[i]
-                            FilterChip(
+                            FilterChip(colors = crystalFilterChipColors(), 
                                 selected = isSel,
                                 onClick = {
                                     if (item.allowMultiple) {
@@ -1656,7 +1678,7 @@ private fun MultiQuestionCard(
                 Surface(
                     color = inputBg,
                     shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, BorderGray),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     BasicTextField(
@@ -1687,7 +1709,7 @@ private fun MultiQuestionCard(
             Button(
                 onClick = { if (allAnswered) onSubmit(pending.items.indices.map { answerFor(it) }) },
                 enabled = allAnswered,
-                colors = ButtonDefaults.buttonColors(containerColor = UserBubbleColor),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             ) { Text(if (pending.items.size == 1) "Submit Answer" else "Submit Answers") }
         }
     }
@@ -1705,15 +1727,15 @@ private fun PlanExitConfirmationCard(
     onDecline: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val darkTheme = isAppInDarkTheme()
-    val bg     = if (darkTheme) Color(0xFF1A2035) else Color(0xFFEEF2FF)
-    val border = if (darkTheme) Color(0xFF3B4D8A) else Color(0xFFC7D2FE)
-    val tint   = if (darkTheme) Color(0xFFA5B4FC) else Color(0xFF3730A3)
-    Surface(
+    val notice = noticeColors(NoticeTone.PLAN)
+    val bg     = notice.fill
+    val border = notice.border
+    val tint   = notice.tint
+    ChatPanel(
         modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        color = bg,
-        border = BorderStroke(1.dp, border),
+        fill = bg,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tier = PanelTier.TILE,
     ) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
@@ -1735,7 +1757,7 @@ private fun PlanExitConfirmationCard(
                 Button(
                     onClick = onApprove,
                     modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = UserBubbleColor),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                 ) {
                     Text("Build it", style = MaterialTheme.typography.labelMedium)
@@ -1761,15 +1783,15 @@ private fun PlanModeSuggestionCard(
     onDecline: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val darkTheme = isAppInDarkTheme()
-    val bg     = if (darkTheme) Color(0xFF1A2035) else Color(0xFFEEF2FF)
-    val border = if (darkTheme) Color(0xFF3B4D8A) else Color(0xFFC7D2FE)
-    val tint   = if (darkTheme) Color(0xFFA5B4FC) else Color(0xFF3730A3)
-    Surface(
+    val notice = noticeColors(NoticeTone.PLAN)
+    val bg     = notice.fill
+    val border = notice.border
+    val tint   = notice.tint
+    ChatPanel(
         modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        color = bg,
-        border = BorderStroke(1.dp, border),
+        fill = bg,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tier = PanelTier.TILE,
     ) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
@@ -1823,17 +1845,17 @@ private fun PlanModeSuggestionCard(
 
 @Composable
 private fun CompactConversationBanner(onCompact: () -> Unit, onDismiss: () -> Unit) {
-    val darkTheme = isAppInDarkTheme()
-    val bg     = if (darkTheme) Color(0xFF2A2000) else Color(0xFFFFFBEB)
-    val border = if (darkTheme) Color(0xFF705E00) else Color(0xFFFDE68A)
-    val tint   = if (darkTheme) Color(0xFFFCD34D) else Color(0xFF92400E)
-    Surface(
+    val notice = noticeColors(NoticeTone.WARNING)
+    val bg     = notice.fill
+    val border = notice.border
+    val tint   = notice.tint
+    ChatPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = bg,
-        border = BorderStroke(1.dp, border),
+        fill = bg,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tier = PanelTier.TILE,
     ) {
         Row(
             modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
@@ -1868,7 +1890,7 @@ private fun ModeEntryConfirmationDialog(
         "Plan mode has the AI explore your project and write a detailed plan before making any changes. You approve the plan before any code is written."
     else
         "Ask mode has the AI ask clarifying questions before proceeding. This takes extra turns and tokens to gather requirements."
-    AlertDialog(
+    BoriAlertDialog(
         onDismissRequest = onCancel,
         title = { Text("Enter $modeName Mode?") },
         text = {
@@ -1895,17 +1917,17 @@ private fun ModeEntryConfirmationDialog(
 
 @Composable
 private fun PlanModeBanner(aiName: String) {
-    val darkTheme = isAppInDarkTheme()
-    val bg     = if (darkTheme) Color(0xFF1A2035) else Color(0xFFEEF2FF)
-    val border = if (darkTheme) Color(0xFF3B4D8A) else Color(0xFFC7D2FE)
-    val tint   = if (darkTheme) Color(0xFFA5B4FC) else Color(0xFF3730A3)
-    Surface(
+    val notice = noticeColors(NoticeTone.PLAN)
+    val bg     = notice.fill
+    val border = notice.border
+    val tint   = notice.tint
+    ChatPanel(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = bg,
-        border = BorderStroke(1.dp, border),
+        fill = bg,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tier = PanelTier.TILE,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1948,15 +1970,13 @@ private fun PlanReviewCard(
     onReject: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val darkTheme = isAppInDarkTheme()
-    val cardBg = if (darkTheme) Color(0xFF1E1D1C) else Color.White
+    val cardBg = MaterialTheme.colorScheme.surfaceContainer
     var expanded by remember { mutableStateOf(false) }
-    Surface(
+    ChatPanel(
         modifier = modifier,
-        tonalElevation = 4.dp,
-        shape = MaterialTheme.shapes.medium,
-        color = cardBg,
-        border = BorderStroke(1.dp, BorderGray),
+        fill = cardBg,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tier = PanelTier.CARD,
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
@@ -1993,12 +2013,16 @@ private fun PlanReviewCard(
             if (expanded) {
                 Spacer(Modifier.height(8.dp))
                 Surface(
-                    color = if (darkTheme) Color(0xFF2C2B2A) else Color(0xFFF8F8F8),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp),
                 ) {
                     Box(modifier = Modifier.verticalScroll(rememberScrollState()).padding(10.dp)) {
-                        MarkdownText(markdown = pending.plan)
+                        MarkdownText(
+                            markdown = pending.plan,
+                            style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                            linkColor = MaterialTheme.colorScheme.primary,
+                        )
                     }
                 }
             }
@@ -2006,7 +2030,7 @@ private fun PlanReviewCard(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = onApprove,
-                    colors = ButtonDefaults.buttonColors(containerColor = UserBubbleColor),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 ) { Text("Approve & Execute") }
                 OutlinedButton(onClick = onReject) { Text("Reject") }
             }
@@ -2039,4 +2063,195 @@ private fun agentGroupOrder(provider: AiProvider): Int = when {
     provider.isCli -> 0
     provider.isLocal || provider == AiProvider.LOCAL_SERVER -> 2
     else -> 1
+}
+
+/** Where Chat sends: Bori's own agent, or a coding CLI running in a terminal tab. */
+@Composable
+private fun TerminalTargetBar(
+    targets: List<com.bori.app.terminal.TerminalBridge.Target>,
+    chosen: com.bori.app.terminal.TerminalBridge.Target?,
+    startable: List<com.bori.app.terminal.TerminalBridge.Startable>,
+    onChoose: (Int?) -> Unit,
+    onOpenTerminal: () -> Unit,
+    onStartMenu: () -> Unit,
+    onStart: (com.bori.app.terminal.TerminalBridge.Startable) -> Unit,
+) {
+    var startMenu by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Send to", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FilterChip(colors = crystalFilterChipColors(), selected = chosen == null, onClick = { onChoose(null) }, label = { Text("Bori agent") })
+            val sameAgent = targets.groupingBy { it.agent }.eachCount()
+            targets.forEach { t ->
+                FilterChip(colors = crystalFilterChipColors(), 
+                    selected = chosen?.tabId == t.tabId,
+                    onClick = { onChoose(t.tabId) },
+                    label = { Text("Terminal · " + t.agent + if ((sameAgent[t.agent] ?: 0) > 1) " (${t.title})" else "") },
+                )
+            }
+            if (startable.isNotEmpty()) {
+                Box {
+                    SuggestionChip(colors = crystalAssistChipColors(), 
+                        onClick = { onStartMenu(); startMenu = true },
+                        label = { Text("Start…") },
+                        icon = { Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    )
+                    BoriDropdownMenu(expanded = startMenu, onDismissRequest = { startMenu = false }) {
+                        val distros = startable.map { it.distroId }.distinct().size
+                        startable.forEach { a ->
+                            DropdownMenuItem(
+                                text = { Text(a.cli.title + if (distros > 1) " · ${a.distroId}" else "") },
+                                onClick = { startMenu = false; onStart(a) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if (chosen != null) {
+            val waiting = chosen.state == com.bori.app.service.StatusNotifier.AgentState.WAITING
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    when (chosen.state) {
+                        com.bori.app.service.StatusNotifier.AgentState.WORKING -> "${chosen.agent} is working…"
+                        com.bori.app.service.StatusNotifier.AgentState.WAITING -> "${chosen.agent} is asking for your approval in the terminal"
+                        com.bori.app.service.StatusNotifier.AgentState.DONE -> "${chosen.agent} is done. Your turn."
+                        null -> "Typed into ${chosen.title}, as if you typed it in the terminal"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (waiting) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onOpenTerminal) { Text(if (waiting) "Open terminal" else "Show terminal") }
+            }
+        }
+    }
+}
+
+/** The "/" commands for the agent Chat sends to, like a CLI's own "/" menu: name, what it does, and whose it is. */
+@Composable
+private fun SlashCommandList(
+    commands: List<com.bori.app.terminal.SlashCommand>,
+    agent: String,
+    onPick: (com.bori.app.terminal.SlashCommand) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ChatPanel(
+        modifier = modifier,
+        fill = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tier = PanelTier.CARD,
+    ) { Column {
+        Text(
+            "$agent commands",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 2.dp),
+        )
+        LazyColumn(Modifier.heightIn(max = 260.dp)) {
+            items(commands.size) { i ->
+                val c = commands[i]
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPick(c) }
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        c.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        modifier = Modifier.widthIn(min = 96.dp, max = 200.dp),
+                    )
+                    Text(
+                        c.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        modifier = Modifier.weight(1f),
+                    )
+                    when (c.source) {
+                        com.bori.app.terminal.SlashCommand.Source.USER -> SourceTag("yours")
+                        com.bori.app.terminal.SlashCommand.Source.PROJECT -> SourceTag("project")
+                        com.bori.app.terminal.SlashCommand.Source.BUILT_IN -> Unit
+                    }
+                }
+            }
+        }
+    }}
+}
+
+@Composable
+private fun SourceTag(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier
+            .background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(6.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
+}
+
+/**
+ * A CLI whose transcript Chat can't read: its terminal screen, live. Messages sent from Chat are typed
+ * there, and its replies show here as it draws them.
+ */
+@Composable
+private fun TerminalScreenMirror(
+    target: com.bori.app.terminal.TerminalBridge.Target,
+    screen: String?,
+    modifier: Modifier,
+) {
+    val scroll = rememberScrollState()
+    LaunchedEffect(screen) { scroll.scrollTo(scroll.maxValue) }
+    Column(modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Text(
+            "Live view of ${target.title}. What you send is typed there; ${target.agent} answers on this screen.",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(12.dp))
+                .verticalScroll(scroll)
+                .horizontalScroll(rememberScrollState())
+                .padding(12.dp),
+        ) {
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(
+                    screen?.takeIf { it.isNotBlank() } ?: "Waiting for ${target.agent} to draw its screen…",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    softWrap = false,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+    }
+}
+
+/** A terminal agent with nothing to show yet. */
+@Composable
+private fun TerminalTargetEmpty(target: com.bori.app.terminal.TerminalBridge.Target, modifier: Modifier) {
+    Box(modifier.padding(24.dp), contentAlignment = Alignment.Center) {
+        Text(
+            "Messages you send here are typed into ${target.title}, where ${target.agent} is running. " +
+                "Its replies show here as it writes them, and the terminal shows the same session.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+    }
 }

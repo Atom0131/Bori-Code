@@ -1,5 +1,9 @@
 ﻿package com.bori.app.ui.git
 
+import com.bori.app.ui.common.GlassCard
+import com.bori.app.ui.common.BoriTopBar
+import com.bori.theme.components.crystalScaffoldContentColor
+import com.bori.theme.components.crystalScaffoldColor
 import com.bori.app.ui.common.readableWidth
 import com.bori.app.ui.common.ShellContentInsets
 import androidx.compose.foundation.layout.Arrangement
@@ -68,15 +72,11 @@ fun GitScreen(
 
     Scaffold(
 
-        contentWindowInsets = ShellContentInsets,
+        contentWindowInsets = ShellContentInsets, containerColor = crystalScaffoldColor(), contentColor = crystalScaffoldContentColor(),
         topBar = {
-            TopAppBar(
-                title = { Text("Git") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
+            BoriTopBar(
+                title = "Git",
+                onBack = onBack,
                 actions = {
                     if (state.isLoading) {
                         CircularProgressIndicator(
@@ -119,7 +119,7 @@ fun GitScreen(
         ) {
             if (!state.isRepo) {
                 item {
-                    Card(modifier = Modifier.fillMaxWidth()) {
+                    GlassCard(modifier = Modifier.fillMaxWidth()) {
                         Column(
                             modifier = Modifier.padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -296,12 +296,7 @@ fun GitScreen(
 
             if (state.error != null) {
                 item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                        ),
-                    ) {
+                    GlassCard(modifier = Modifier.fillMaxWidth().padding(top = 16.dp), fill = MaterialTheme.colorScheme.errorContainer) {
                         Row(
                             modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,

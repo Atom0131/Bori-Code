@@ -302,13 +302,21 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** Persists the user's chosen chat-bubble/send-button color (ARGB long). */
-    fun setChatBubbleColor(argb: Long) {
-        viewModelScope.launch { prefsRepository.updateChatBubbleColor(argb) }
+    fun setTheme(theme: com.bori.theme.settings.BoriThemeSettings) {
+        viewModelScope.launch { prefsRepository.setTheme(theme) }
     }
 
-    fun setThemeMode(mode: com.bori.app.data.prefs.ThemeMode) {
-        viewModelScope.launch { prefsRepository.setThemeMode(mode) }
+    /** Glass Intensity while its slider is held; null on release (the value is saved by setTheme). */
+    fun previewCrystalIntensity(value: Float?) {
+        prefsRepository.crystalIntensityPreview.value = value
+    }
+
+    fun rememberCustomColor(argb: Int) {
+        viewModelScope.launch { prefsRepository.rememberCustomColor(argb) }
+    }
+
+    fun removeCustomColor(slot: Int) {
+        viewModelScope.launch { prefsRepository.removeCustomColor(slot) }
     }
 
     fun setKotlinTimeoutMinutes(minutes: Int) {

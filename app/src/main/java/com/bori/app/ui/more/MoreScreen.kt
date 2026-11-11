@@ -1,5 +1,10 @@
 package com.bori.app.ui.more
 
+import com.bori.app.ui.common.LinkGroup
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import com.bori.theme.components.crystalScaffoldContentColor
+import com.bori.theme.components.crystalScaffoldColor
 import com.bori.app.ui.common.ShellContentInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -25,17 +30,20 @@ fun MoreScreen(
     onOpenLogs: () -> Unit,
     onOpenAbout: () -> Unit,
 ) {
-    Scaffold(contentWindowInsets = ShellContentInsets, topBar = { BoriTopBar(title = "More") }) { padding ->
+    Scaffold(contentWindowInsets = ShellContentInsets, containerColor = crystalScaffoldColor(), contentColor = crystalScaffoldContentColor(), topBar = { BoriTopBar(title = "More") }) { padding ->
         ReadableColumn(
             modifier = Modifier
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
         ) {
-            LinkRow("Settings", "AI models and keys, appearance, build, backup", Icons.Default.Settings, onOpenSettings)
-            LinuxMoreRow(onOpenLinux)
-            LinkRow("App logs", "Logs from Bori Code and the apps you build", Icons.Default.BugReport, onOpenLogs)
-            LinkRow("About & licenses", "Version and open-source notices", Icons.Default.Info, onOpenAbout)
+            Spacer(Modifier.height(8.dp))
+            LinkGroup {
+                LinkRow("Settings", "AI models and keys, appearance, build, backup", Icons.Default.Settings, onOpenSettings)
+                LinuxMoreRow(onOpenLinux)
+                LinkRow("App logs", "Logs from Bori Code and the apps you build", Icons.Default.BugReport, onOpenLogs)
+                LinkRow("About & licenses", "Version and open-source notices", Icons.Default.Info, onOpenAbout)
+            }
         }
     }
 }

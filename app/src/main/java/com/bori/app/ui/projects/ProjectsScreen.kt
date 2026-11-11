@@ -1,5 +1,9 @@
 ﻿package com.bori.app.ui.projects
 
+import com.bori.app.ui.common.GlassCard
+import com.bori.theme.util.BoriAlertDialog
+import com.bori.theme.components.crystalScaffoldContentColor
+import com.bori.theme.components.crystalScaffoldColor
 import com.bori.app.ui.common.ShellContentInsets
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -171,7 +175,7 @@ fun ProjectsScreen(
     }
 
     projectToDelete?.let { pending ->
-        AlertDialog(
+        BoriAlertDialog(
             onDismissRequest = { projectToDelete = null },
             title = { Text("Delete project?") },
             text = { Text("\"${pending.name}\" will be moved to the deleted projects folder. You can restore it from Settings.") },
@@ -188,7 +192,7 @@ fun ProjectsScreen(
     }
 
     projectToBuild?.let { pending ->
-        AlertDialog(
+        BoriAlertDialog(
             onDismissRequest = { projectToBuild = null },
             title = { Text("Build project?") },
             text = { Text("Build \"${pending.name}\"?") },
@@ -229,7 +233,7 @@ fun ProjectsScreen(
 
     Scaffold(
 
-        contentWindowInsets = ShellContentInsets,
+        contentWindowInsets = ShellContentInsets, containerColor = crystalScaffoldColor(), contentColor = crystalScaffoldContentColor(),
         topBar = {
             BoriTopBar(
                 title = "Projects",
@@ -321,7 +325,7 @@ private fun ProjectCard(
     var showApkSizeWarning by remember { mutableStateOf(false) }
 
     if (showApkSizeWarning) {
-        AlertDialog(
+        BoriAlertDialog(
             onDismissRequest = { showApkSizeWarning = false },
             title = { Text("Large APK") },
             text = { Text("Are you sure you want to do this? This APK is ${formatApkSize(apkFile.length())} and will take up that much space on your device.") },
@@ -338,14 +342,8 @@ private fun ProjectCard(
         )
     }
 
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isActive) MaterialTheme.colorScheme.secondaryContainer
-                else MaterialTheme.colorScheme.surfaceVariant,
-        ),
-    ) {
+    GlassCard(onClick = onClick, modifier = Modifier.fillMaxWidth(), fill = if (isActive) MaterialTheme.colorScheme.secondaryContainer
+                else MaterialTheme.colorScheme.surfaceContainer) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),

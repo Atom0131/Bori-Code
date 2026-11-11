@@ -16,7 +16,7 @@ on-device Gemma 4 E2B/E4B via LiteRT-LM).
   have the `BCBK` header; the old `MMBK` (Mimir) ones still import. The keystore alias inside
   `bori-code-release.jks` is still `mimir`. That's only a name in the key file.
 - versionName `4.4.2`, versionCode `12`
-- minSdk 26, targetSdk 35, compileSdk 35 (Android 8.0 → 15), JVM target 11
+- minSdk 26, targetSdk 35, compileSdk 37 (Android 8.0 → 15; compileSdk only makes newer APIs visible), JVM target 11
 - ~160 Kotlin files across 6 Gradle modules. UI is 100% Jetpack Compose. DI is Hilt.
 
 ## Module map
@@ -28,11 +28,12 @@ on-device Gemma 4 E2B/E4B via LiteRT-LM).
 | `:core:project` | `core/project/` | Project model, scaffold/templates, Room DB, JGit, RepoMapper |
 | `:core:editor` | `core/editor/` | Sora Editor bindings, syntax highlight, diagnostics, completion, symbol extraction |
 | `:core:security` | `core/security/` | `KeyVault` (EncryptedSharedPreferences), `AiProvider` enum |
-| `:core:linux` | `core/linux/` | **Full flavor only.** proot launcher, distro installer, guest policy, Claude Code / Antigravity chat clients (`cli/`) |
+| `:core:linux` | `core/linux/` | **Full flavor only.** proot launcher, distro installer, guest policy, the coding-CLI catalog (`CodingCli`: Claude Code, Antigravity, Codex, Gemini, OpenCode, Kimi…) + the user's own (`CustomCliStore`), Claude Code / Antigravity chat clients (`cli/`) |
 | `:core:terminal` | `core/terminal/` | Vendored Termux terminal-emulator / terminal-view (Apache-2.0, see its NOTICE) |
+| `:core:theme` | `core/theme/` | **The Bori theme engine (v2)**, shared with the Bori Habit Tracker: Material 3, Expressive, Crystal (glass over a colour field) and the hidden Borikén overlay, plus the kit (`BoriSheet`, `BoriAlertDialog`, `BoriDropdownMenu`, glass tiers, settings rows, the Appearance picker). Copied from `~/Documents/Code/Bori- habit tracker/Bori Habit Tracker theme engine version 2` by `scripts/sync_bori_theme.sh`; don't edit `core/theme/src`, change the engine (or the habit tracker and re-export) and sync. See its README and `docs/ENGINE.md` |
 | `:core:keyboard` | `core/keyboard/` | Bori Keyboard itself for the terminal: dictionaries, correction, glide, learning, and its keyboard views + `TypingSession` (GPL-3.0; dictionaries CC BY-SA 4.0, see its ATTRIBUTION.md). Copied from the bori-keyboard project (written inside Bori Code on the phone) by `scripts/sync_bori_keyboard.sh`, which applies the same small patches each time; don't edit the copied files, change the script or `ime/InputHost.kt` (Bori Code's own). The app hosts it in `ui/terminal/BoriKeys.kt` |
 
-Dependency direction: `app → core:{ai,build,editor,project,security,terminal,keyboard}` (+ `core:linux`
+Dependency direction: `app → core:{ai,build,editor,project,security,terminal,keyboard,theme}` (+ `core:linux`
 in the full flavor only); `core:ai → core:security, core:editor`; `core:build → core:project`;
 `core:linux → core:{ai,project,security}`.
 
@@ -63,7 +64,7 @@ gradlew.bat :app:assembleDebug :app:bundleRelease    # Windows
 ./gradlew  :app:assembleDebug :app:bundleRelease      # Linux/macOS
 ```
 On Linux, `gradle.properties` pins a Windows `org.gradle.java.home`, so override it
-and use a JDK 21 (Gradle 8.11.1 can't run on newer JDKs):
+and use a JDK 21 (the build is tested on JDK 21):
 `./gradlew -Dorg.gradle.java.home=$JAVA_HOME :app:assembleDebug :app:bundleRelease`
 
 `copyBuildTools` is pinned to platform 35 + build-tools 37.0.0 and has declared
@@ -103,8 +104,11 @@ Outputs:
 - Release AABs → `app/build/outputs/bundle/{play,full}Release/app-{play,full}-release.aab`
   (Play gets `playRelease`)
 
-Toolchain (from `gradle/libs.versions.toml`): AGP 8.7.3, Kotlin 2.0.21 (build),
-Compose BOM 2024.12.01, Hilt 2.57, Room 2.7.0. The *bundled on-device* compilers are
+Toolchain (from `gradle/libs.versions.toml`, the habit tracker's versions since 2026-11-11): Gradle 9.5,
+AGP 9.2.0 (built-in Kotlin, no `kotlin-android` plugin), Kotlin 2.3.21, KSP 2.3.6, Compose BOM 2026.06.01,
+Hilt 2.60.1, Room 2.8.4, materialkolor 5.0.0. Two pins on purpose: `:core:build`'s own code is compiled
+with Kotlin 2.0.21 (`kotlin { compilerVersion }` in its build file; 2.3 makes `BuildEngine.runBuild` too
+large for one JVM method), and `apksig` stays 8.7.3 (it was tied to the AGP version). The *bundled on-device* compilers are
 separate from these: Kotlin 2.0.21 (`kotlin-compiler-asset`, patched for ART by `copyBuildTools`)
 and ECJ 3.32 (Java up to 17, patched for Android 8+ by the `patchEcj` task).
 
@@ -123,9 +127,21 @@ and ECJ 3.32 (Java up to 17, patched for Android 8+ by the `patchEcj` task).
   `data/prefs/SessionStateStore`. Chat/Code/Terminal/Projects ViewModels are activity-scoped.
   `ui/adaptive/WindowLayout` gives the width class and hinge; screen Scaffolds use `ShellContentInsets`.
 - Terminal panes: `terminal/PaneLayout.kt` + `TerminalSessionManager.layout` (one session per pane).
+- Chat ↔ terminal agents: `terminal/TerminalBridge.kt` (Chat can start and type into any installed CLI's tab; for
+  Claude Code / Antigravity it reads the transcript as messages, for the rest it shows the tab's screen live). Typing
+  "/" lists that agent's commands: built-ins plus the user's command/skill files (`terminal/AgentCommands.kt`). Workspace divider drags edge to edge; letting go near an edge maximizes the other side edge to edge,
+  and unfolded a small handle floats over that edge (tap: the hidden side goes full screen; drag: split again; its
+  height is excluded from the Back swipe).
 - Terminal keyboard: top bar keys go straight to the terminal; text is typed into the type bar (Bori Keyboard or
   the phone's keyboard) and Enter sends the line (`ui/terminal/TerminalKeyboard.kt`, `BoriKeys.kt`). Closing a
   tab kills its whole process tree (`terminal/ProcessReaper.kt`): proot killed alone leaves programs spinning on a dead PTY.
+- Look and theme: `ui/theme/Theme.kt` `BoriCodeTheme(settings)` wraps the engine's `BoriThemedRoot`; the
+  settings are one `BoriThemeSettings` (JSON in prefs key `theme_settings`; Crystal for new installs).
+  Build UI from `MaterialTheme.colorScheme` roles and the engine's tiers/kit, never hex colours: cards are
+  `ui/common/GlassCard` / `CollapsibleSection` / `LinkGroup`, Chat's surfaces are `ui/chat/ChatStyle.kt`
+  (`ChatPanel`, `noticeColors`), Scaffolds use `crystalScaffoldColor()`, top bars are `BoriTopBar` (a
+  `CrystalBar`). Only `BoriColors` (diff, terminal) keeps fixed colours; the terminal canvas stays black.
+  Under Crystal pages are transparent, so the workspace hides itself (alpha 0) behind other routes.
 - Preferences: `app/.../data/prefs/UserPreferencesRepository.kt` (auto-sanitizes
   stale model IDs; also caches each provider's live model list from Settings →
   "Refresh models").

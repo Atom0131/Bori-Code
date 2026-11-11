@@ -1,5 +1,7 @@
 package com.bori.app.ui.tutorial
 
+import com.bori.app.ui.theme.BoriTheme
+import com.bori.app.ui.common.GlassCard
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,7 +54,6 @@ import com.bori.app.ui.tutorial.TutorialSession.Phase
 import com.bori.app.ui.tutorial.TutorialViewModel.Step
 import com.bori.core.ai.local.DownloadState
 
-private val successGreen = Color(0xFF4CAF50)
 
 /**
  * The tutorial card above the bottom bar. [onGoToChat] switches to the Chat tab, where each
@@ -70,13 +71,9 @@ fun TutorialOverlay(viewModel: TutorialViewModel, onGoToChat: () -> Unit, modifi
         if (step == Step.ROUNDS && round.phase == Phase.AWAITING_SEND) onGoToChat()
     }
 
-    Card(
-        modifier = modifier
+    GlassCard(modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        shape = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-    ) {
+            .padding(horizontal = 12.dp, vertical = 8.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
             when (step) {
                 Step.WELCOME -> {
@@ -117,7 +114,7 @@ fun TutorialOverlay(viewModel: TutorialViewModel, onGoToChat: () -> Unit, modifi
                     }
                 }
                 Step.DONE -> {
-                    Header(Icons.Default.CheckCircle, "You built an app with on-device AI", successGreen)
+                    Header(Icons.Default.CheckCircle, "You built an app with on-device AI", BoriTheme.colors.diffAdded)
                     Body(
                         "That's the loop: ask, build, try it, then ask for changes. " +
                             "Everything ran on this phone, with no internet.",
@@ -160,7 +157,7 @@ private fun RoundBody(viewModel: TutorialViewModel, state: TutorialSession.State
             LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 10.dp))
         }
         Phase.BUILT -> {
-            Header(Icons.Default.CheckCircle, "$title · Try it", successGreen)
+            Header(Icons.Default.CheckCircle, "$title · Try it", BoriTheme.colors.diffAdded)
             Body("Built (${state.apkSize}). Tap Install in the installer, then: ${round.tryIt}")
             Buttons(onSkip = null) {
                 OutlinedButton(onClick = session::openApp) { Text("Open app") }
@@ -263,7 +260,7 @@ private fun CheckModelBody(downloadState: DownloadState, modelAdvice: String?) {
         is DownloadState.Ready -> Text(
             text = "Model ready!",
             style = MaterialTheme.typography.bodyMedium,
-            color = successGreen,
+            color = BoriTheme.colors.diffAdded,
             modifier = Modifier.padding(top = 8.dp),
         )
     }

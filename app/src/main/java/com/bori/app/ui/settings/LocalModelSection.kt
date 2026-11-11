@@ -1,5 +1,7 @@
 package com.bori.app.ui.settings
 
+import com.bori.app.ui.common.GlassCard
+import com.bori.theme.util.BoriAlertDialog
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -111,7 +113,7 @@ fun LocalModelSection(
         )
 
         confirmModel?.let { fit ->
-            AlertDialog(
+            BoriAlertDialog(
                 onDismissRequest = { confirmModel = null },
                 title = { Text("${fit.model.label} may not run") },
                 text = { Text("${fit.reason} It may fail to load or make the phone very slow.") },
@@ -252,10 +254,7 @@ private fun ModelAdvisorCard(
 ) {
     var editing by remember { mutableStateOf(false) }
 
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
+    GlassCard(modifier = Modifier.fillMaxWidth(), fill = MaterialTheme.colorScheme.surfaceContainer) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text("Recommended for this phone", style = MaterialTheme.typography.titleSmall)
             Text(

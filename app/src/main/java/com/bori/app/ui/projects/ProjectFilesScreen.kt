@@ -1,5 +1,9 @@
 package com.bori.app.ui.projects
 
+import com.bori.theme.util.BoriAlertDialog
+import com.bori.theme.util.BoriDropdownMenu
+import com.bori.theme.components.crystalScaffoldContentColor
+import com.bori.theme.components.crystalScaffoldColor
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -245,7 +249,7 @@ fun ProjectFilesScreen(
         BackHandler { if (dir != root) dir = dir.parentFile ?: root else onDismiss() }
         run {
             Scaffold(
-                contentWindowInsets = ShellContentInsets,
+                contentWindowInsets = ShellContentInsets, containerColor = crystalScaffoldColor(), contentColor = crystalScaffoldContentColor(),
                 snackbarHost = { SnackbarHost(snackbar) },
                 topBar = {
                     BoriTopBar(
@@ -257,7 +261,7 @@ fun ProjectFilesScreen(
                                 Icon(Icons.Default.UploadFile, contentDescription = "Add files from phone")
                             }
                             IconButton(onClick = { topMenu = true }) { Icon(Icons.Default.MoreVert, "More") }
-                            DropdownMenu(expanded = topMenu, onDismissRequest = { topMenu = false }) {
+                            BoriDropdownMenu(expanded = topMenu, onDismissRequest = { topMenu = false }) {
                                 DropdownMenuItem(
                                     text = { Text("New folder") },
                                     leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) },
@@ -319,7 +323,7 @@ fun ProjectFilesScreen(
                                     onLongClick = { menuFor = file },
                                 )
                                 Box {
-                                    DropdownMenu(expanded = menuFor == file, onDismissRequest = { menuFor = null }) {
+                                    BoriDropdownMenu(expanded = menuFor == file, onDismissRequest = { menuFor = null }) {
                                         DropdownMenuItem(
                                             text = { Text("Copy path for agent") },
                                             leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
@@ -358,7 +362,7 @@ fun ProjectFilesScreen(
                 if (msg != null) scope.launch { snackbar.showSnackbar(msg) }
             }
             when (kind) {
-                FileAction.DELETE -> AlertDialog(
+                FileAction.DELETE -> BoriAlertDialog(
                     onDismissRequest = { action = null },
                     title = { Text("Delete ${target.name}?") },
                     text = { Text(if (target.isDirectory) "The folder and everything in it will be deleted." else "This can't be undone.") },
@@ -372,7 +376,7 @@ fun ProjectFilesScreen(
                     },
                     dismissButton = { TextButton(onClick = { action = null }) { Text("Cancel") } },
                 )
-                FileAction.RENAME, FileAction.NEW_FOLDER -> AlertDialog(
+                FileAction.RENAME, FileAction.NEW_FOLDER -> BoriAlertDialog(
                     onDismissRequest = { action = null },
                     title = { Text(if (kind == FileAction.RENAME) "Rename" else "New folder") },
                     text = {

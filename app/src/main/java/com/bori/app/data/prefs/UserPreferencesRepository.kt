@@ -11,6 +11,8 @@ import com.bori.app.flavor.HAS_LINUX
 import com.bori.core.ai.model.ModelCatalog
 import com.bori.core.build.model.CompilerPerformanceProfile
 import com.bori.core.security.AiProvider
+import com.bori.theme.settings.BoriThemeSettings
+import com.bori.theme.settings.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -34,9 +36,14 @@ class UserPreferencesRepository @Inject constructor(
         val HAS_SEEN_ONBOARDING = booleanPreferencesKey("has_seen_onboarding")
         val HAS_DISMISSED_TUTORIAL = booleanPreferencesKey("has_dismissed_tutorial")
         val EXPERIMENTAL_FEATURES_ENABLED = booleanPreferencesKey("experimental_features_enabled")
-        // User-selectable chat bubble / send-button color, stored as an ARGB long.
+        // Before the theme engine (4.4.2 and older): the chat-bubble colour and light/dark. Read
+        // once, when there are no THEME_SETTINGS yet, so an update keeps what the user chose.
         val CHAT_BUBBLE_COLOR = longPreferencesKey("chat_bubble_color")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        // The Bori theme engine's settings, as BoriThemeSettings.toJson().
+        val THEME_SETTINGS = stringPreferencesKey("theme_settings")
+        // Saved custom colours, comma-separated ARGB ints.
+        val CUSTOM_COLORS = stringPreferencesKey("custom_colors")
         fun cachedModels(provider: AiProvider) = stringPreferencesKey("models_${provider.name}")
     }
 
@@ -63,13 +70,26 @@ class UserPreferencesRepository @Inject constructor(
             hasSeenOnboarding = prefs[Keys.HAS_SEEN_ONBOARDING] ?: false,
             hasDismissedTutorial = prefs[Keys.HAS_DISMISSED_TUTORIAL] ?: false,
             experimentalFeaturesEnabled = prefs[Keys.EXPERIMENTAL_FEATURES_ENABLED] ?: false,
-            // Defaults to the original blue (0xFF1A56DB) when unset.
-            chatBubbleColor = prefs[Keys.CHAT_BUBBLE_COLOR] ?: 0xFF1A56DB,
-            themeMode = prefs[Keys.THEME_MODE]
-                ?.let { name -> ThemeMode.entries.firstOrNull { it.name == name } }
-                ?: ThemeMode.SYSTEM,
+            theme = prefs[Keys.THEME_SETTINGS]?.let { BoriThemeSettings.fromJson(it, DefaultBoriCodeTheme) }
+                ?: themeFromOldPrefs(prefs),
+            customColors = prefs[Keys.CUSTOM_COLORS].orEmpty().split(',')
+                .map { it.trim().toIntOrNull() }.filter { it != null }.take(MAX_CUSTOM_COLORS),
             cachedModels = cachedModels,
         )
+    }
+
+    /**
+     * The theme of an install from before the engine: Crystal, with its light/dark choice, and its
+     * chat-bubble colour as the accent if it had picked one (the original blue meant "never picked",
+     * so Crystal's field supplies the accent then).
+     */
+    private fun themeFromOldPrefs(prefs: Preferences): BoriThemeSettings {
+        var theme = DefaultBoriCodeTheme
+        prefs[Keys.THEME_MODE]?.let { name -> ThemeMode.entries.firstOrNull { it.name == name } }
+            ?.let { theme = theme.withThemeMode(it) }
+        prefs[Keys.CHAT_BUBBLE_COLOR]?.takeIf { it != OLD_DEFAULT_BUBBLE }
+            ?.let { theme = theme.withAccent(-1, it.toInt()) }
+        return theme
     }
 
     /**
@@ -144,12 +164,34 @@ class UserPreferencesRepository @Inject constructor(
         dataStore.edit { it[Keys.EXPERIMENTAL_FEATURES_ENABLED] = enabled }
     }
 
-    /** Persists the user's chosen chat-bubble color as an ARGB long. */
-    suspend fun updateChatBubbleColor(argb: Long) {
-        dataStore.edit { it[Keys.CHAT_BUBBLE_COLOR] = argb }
+    /** Glass Intensity while its slider is held (null otherwise): repaints live, saved once on release. */
+    val crystalIntensityPreview = kotlinx.coroutines.flow.MutableStateFlow<Float?>(null)
+
+    suspend fun setTheme(theme: BoriThemeSettings) {
+        dataStore.edit { it[Keys.THEME_SETTINGS] = theme.toJson() }
     }
 
-    suspend fun setThemeMode(mode: ThemeMode) {
-        dataStore.edit { it[Keys.THEME_MODE] = mode.name }
+    /** Saves a picked custom colour, newest first, keeping the six most recent. */
+    suspend fun rememberCustomColor(argb: Int) {
+        dataStore.edit { prefs ->
+            val now = (listOf(argb) + parseColors(prefs[Keys.CUSTOM_COLORS]).filter { it != argb })
+                .take(MAX_CUSTOM_COLORS)
+            prefs[Keys.CUSTOM_COLORS] = now.joinToString(",")
+        }
+    }
+
+    suspend fun removeCustomColor(slot: Int) {
+        dataStore.edit { prefs ->
+            val now = parseColors(prefs[Keys.CUSTOM_COLORS]).filterIndexed { i, _ -> i != slot }
+            prefs[Keys.CUSTOM_COLORS] = now.joinToString(",")
+        }
+    }
+
+    private fun parseColors(raw: String?): List<Int> =
+        raw.orEmpty().split(',').mapNotNull { it.trim().toIntOrNull() }
+
+    private companion object {
+        const val OLD_DEFAULT_BUBBLE = 0xFF1A56DB
+        const val MAX_CUSTOM_COLORS = 6
     }
 }

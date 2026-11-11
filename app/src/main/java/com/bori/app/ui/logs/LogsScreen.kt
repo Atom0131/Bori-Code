@@ -1,5 +1,9 @@
 ﻿package com.bori.app.ui.logs
 
+import com.bori.app.ui.common.GlassCard
+import com.bori.app.ui.common.BoriTopBar
+import com.bori.theme.components.crystalScaffoldContentColor
+import com.bori.theme.components.crystalScaffoldColor
 import com.bori.app.ui.common.ShellContentInsets
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -91,15 +95,11 @@ fun LogsScreen(
 
     Scaffold(
 
-        contentWindowInsets = ShellContentInsets,
+        contentWindowInsets = ShellContentInsets, containerColor = crystalScaffoldColor(), contentColor = crystalScaffoldContentColor(),
         topBar = {
-            TopAppBar(
-                title = { Text("App Logs") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
+            BoriTopBar(
+                title = "App Logs",
+                onBack = onBack,
                 actions = {
                     IconButton(
                         onClick = { pinToBottom = !pinToBottom },
@@ -135,14 +135,9 @@ fun LogsScreen(
             // READ_LOGS grant banner
             if (!readLogsGranted) {
                 val adbCmd = "adb shell pm grant ${context.packageName} android.permission.READ_LOGS"
-                Card(
-                    modifier = Modifier
+                GlassCard(modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                    ),
-                ) {
+                        .padding(horizontal = 12.dp, vertical = 6.dp), fill = MaterialTheme.colorScheme.tertiaryContainer) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
                             "⚠ To view your app's logs, run this ADB command once:",

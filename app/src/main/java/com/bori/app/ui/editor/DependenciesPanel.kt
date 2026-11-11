@@ -1,5 +1,6 @@
 ﻿package com.bori.app.ui.editor
 
+import com.bori.theme.util.BoriAlertDialog
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -45,7 +46,7 @@ fun DependenciesPanel(
     var addInput by remember { mutableStateOf("") }
 
     if (showAddDialog) {
-        AlertDialog(
+        BoriAlertDialog(
             onDismissRequest = { showAddDialog = false; addInput = "" },
             title = { Text("Add Dependency") },
             text = {

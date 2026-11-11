@@ -1,5 +1,6 @@
 ﻿package com.bori.app.ui.editor
 
+import com.bori.theme.util.BoriSheet
 import android.util.Xml
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -76,8 +77,8 @@ fun LayoutPreviewSheet(
     val nodes = result.getOrNull()
     val error = result.exceptionOrNull()
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
+    BoriSheet(
+        onDismiss = onDismiss,
         sheetState = rememberModalBottomSheetState(),
     ) {
         Column(

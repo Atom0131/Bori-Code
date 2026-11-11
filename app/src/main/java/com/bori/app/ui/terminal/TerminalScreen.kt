@@ -1,5 +1,7 @@
 ﻿package com.bori.app.ui.terminal
 
+import com.bori.theme.util.BoriAlertDialog
+import com.bori.theme.util.BoriDropdownMenu
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -251,14 +253,13 @@ fun TerminalScreen(
                 BoriTopBar(
                     title = "Terminal",
                     onBack = onBack,
-                    containerColor = colors.terminalBar,
-                    contentColor = colors.terminalText,
+                    // The theme's bar, like every other screen; only the terminal canvas stays black.
                     actions = {
                         Box {
                             IconButton(onClick = { splitMenu = true }) {
                                 Icon(Icons.Default.SpaceDashboard, contentDescription = "Split")
                             }
-                            DropdownMenu(expanded = splitMenu, onDismissRequest = { splitMenu = false }) {
+                            BoriDropdownMenu(expanded = splitMenu, onDismissRequest = { splitMenu = false }) {
                                 Split.entries.forEach { split ->
                                     val allowed = when (split) {
                                         Split.SINGLE, Split.ROWS -> true
@@ -294,7 +295,7 @@ fun TerminalScreen(
                                 ) {
                                     CodeRainIcon(tint = colors.terminalText)
                                 }
-                                DropdownMenu(expanded = agentMenu, onDismissRequest = { agentMenu = false }) {
+                                BoriDropdownMenu(expanded = agentMenu, onDismissRequest = { agentMenu = false }) {
                                     val clis = remember(agentMenu) { if (agentMenu) viewModel.clis() else emptyList() }
                                     val distros = clis.map { it.first }.distinct().size
                                     clis.forEach { (distro, cli) ->
@@ -318,7 +319,7 @@ fun TerminalScreen(
                             IconButton(onClick = { newTabMenu = true }) {
                                 Icon(Icons.Default.Add, contentDescription = "New session")
                             }
-                            DropdownMenu(expanded = newTabMenu, onDismissRequest = { newTabMenu = false }) {
+                            BoriDropdownMenu(expanded = newTabMenu, onDismissRequest = { newTabMenu = false }) {
                                 viewModel.installedDistros().forEach { distro ->
                                     DropdownMenuItem(
                                         text = { Text("Linux shell (${distro.replaceFirstChar { it.uppercase() }})") },
@@ -456,7 +457,7 @@ fun TerminalScreen(
 
     explainAutoEnter?.let { id ->
         val totals = remember { viewModel.autoEnterTotals() }
-        AlertDialog(
+        BoriAlertDialog(
             onDismissRequest = { explainAutoEnter = null },
             title = { Text("Auto-enter") },
             text = {
@@ -703,7 +704,8 @@ private fun TerminalPane(
 }
 
 private fun cliLabel(cli: CliLauncher, distro: String, showDistro: Boolean) =
-    if (showDistro) "${cli.title} (${distro.replaceFirstChar { it.uppercase() }})" else cli.title
+    (if (showDistro) "${cli.title} (${distro.replaceFirstChar { it.uppercase() }})" else cli.title) +
+        if (cli.custom) " · your own" else ""
 
 /** An empty pane: one tap opens a shell or a coding CLI in it. */
 @Composable

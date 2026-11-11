@@ -8,12 +8,12 @@ import androidx.activity.enableEdgeToEdge
 import android.graphics.Color
 import androidx.compose.runtime.DisposableEffect
 import com.bori.app.data.build.LiveDiagnosticsController
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import com.bori.app.data.prefs.ThemeMode
+import com.bori.app.data.prefs.DefaultBoriCodeTheme
 import com.bori.app.ui.BoriNavHost
-import com.bori.app.ui.theme.BoriTheme
+import com.bori.app.ui.theme.BoriCodeTheme
+import com.bori.theme.isDark
 import com.bori.core.ai.suggestion.InlineSuggestionEngine
 import com.bori.core.editor.EditorController
 import dagger.hilt.android.AndroidEntryPoint
@@ -40,11 +40,11 @@ class MainActivity : ComponentActivity() {
         liveDiagnosticsController.start()
         setContent {
             val prefs by prefsRepository.preferences.collectAsState(initial = null)
-            val dark = when (prefs?.themeMode) {
-                ThemeMode.LIGHT -> false
-                ThemeMode.DARK -> true
-                else -> isSystemInDarkTheme()
-            }
+            // While Settings' Glass Intensity slider is held, the app repaints at that value.
+            val intensityPreview by prefsRepository.crystalIntensityPreview.collectAsState()
+            val theme = (prefs?.theme ?: DefaultBoriCodeTheme)
+                .let { t -> intensityPreview?.let { t.copy(crystalIntensity = it) } ?: t }
+            val dark = theme.isDark()
             // Status and navigation bar icons follow the app's theme, not only the system's.
             DisposableEffect(dark) {
                 enableEdgeToEdge(
@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
                 )
                 onDispose {}
             }
-            BoriTheme(darkTheme = dark) {
+            BoriCodeTheme(theme) {
                 BoriNavHost(
                     editorController = editorController,
                     suggestionEngine = suggestionEngine,

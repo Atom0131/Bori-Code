@@ -1,5 +1,6 @@
 package com.bori.app.ui.common
 
+import com.bori.theme.util.BoriSheet
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -81,7 +82,7 @@ fun ProjectPickerSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    BoriSheet(onDismiss = onDismiss, sheetState = sheetState) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()

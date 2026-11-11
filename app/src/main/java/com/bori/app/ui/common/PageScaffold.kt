@@ -1,5 +1,7 @@
 package com.bori.app.ui.common
 
+import com.bori.theme.components.CrystalBar
+import com.bori.theme.components.crystalTopAppBarColors
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -52,6 +54,38 @@ fun BoriTopBar(
     titleContent: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
+    // Explicit colours (the terminal's own bar) keep a plain bar; otherwise the theme's bar: glass
+    // under Crystal with its hairline, the usual flat bar under Material 3 and Expressive.
+    val themed = containerColor == Color.Unspecified && contentColor == Color.Unspecified
+    if (themed) {
+        CrystalBar {
+            BoriTopBarContent(title, subtitle, onBack, titleContent, actions, crystalTopAppBarColors())
+        }
+        return
+    }
+    BoriTopBarContent(
+        title, subtitle, onBack, titleContent, actions,
+        TopAppBarDefaults.topAppBarColors().let { base ->
+            TopAppBarDefaults.topAppBarColors(
+                containerColor = containerColor.takeOrElse { base.containerColor },
+                titleContentColor = contentColor.takeOrElse { base.titleContentColor },
+                navigationIconContentColor = contentColor.takeOrElse { base.navigationIconContentColor },
+                actionIconContentColor = contentColor.takeOrElse { base.actionIconContentColor },
+            )
+        },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BoriTopBarContent(
+    title: String,
+    subtitle: String?,
+    onBack: (() -> Unit)?,
+    titleContent: (@Composable () -> Unit)?,
+    actions: @Composable RowScope.() -> Unit,
+    colors: androidx.compose.material3.TopAppBarColors,
+) {
     TopAppBar(
         title = {
             if (titleContent != null) {
@@ -79,15 +113,7 @@ fun BoriTopBar(
             }
         },
         actions = actions,
-        colors = TopAppBarDefaults.topAppBarColors().let { base ->
-            if (containerColor == Color.Unspecified && contentColor == Color.Unspecified) base
-            else TopAppBarDefaults.topAppBarColors(
-                containerColor = containerColor.takeOrElse { base.containerColor },
-                titleContentColor = contentColor.takeOrElse { base.titleContentColor },
-                navigationIconContentColor = contentColor.takeOrElse { base.navigationIconContentColor },
-                actionIconContentColor = contentColor.takeOrElse { base.actionIconContentColor },
-            )
-        },
+        colors = colors,
     )
 }
 

@@ -1,5 +1,6 @@
 ﻿package com.bori.app.ui.projects
 
+import com.bori.theme.util.BoriAlertDialog
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -47,7 +48,7 @@ fun NewProjectDialog(
     val nameError = name.isBlank()
     val packageError = !PACKAGE_REGEX.matches(packageName)
 
-    AlertDialog(
+    BoriAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("New Project") },
         text = {

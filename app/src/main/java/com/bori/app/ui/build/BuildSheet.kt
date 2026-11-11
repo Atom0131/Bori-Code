@@ -1,5 +1,6 @@
 package com.bori.app.ui.build
 
+import com.bori.theme.util.BoriSheet
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -103,8 +104,8 @@ private fun BuildSheetContent(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
+    BoriSheet(
+        onDismiss = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
         Column(

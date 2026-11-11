@@ -1,5 +1,6 @@
 package com.bori.app.ui.editor
 
+import com.bori.theme.util.BoriAlertDialog
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.text.format.Formatter
@@ -42,7 +43,7 @@ fun ImagePreviewDialog(path: String, onDismiss: () -> Unit) {
         failed = bitmap == null
     }
 
-    AlertDialog(
+    BoriAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         text = {

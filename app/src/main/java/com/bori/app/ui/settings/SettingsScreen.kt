@@ -1,5 +1,10 @@
 ﻿package com.bori.app.ui.settings
 
+import androidx.compose.ui.layout.layout
+import com.bori.theme.util.BoriAlertDialog
+import com.bori.app.ui.common.LinkGroup
+import com.bori.theme.components.crystalScaffoldContentColor
+import com.bori.theme.components.crystalScaffoldColor
 import com.bori.app.ui.common.ShellContentInsets
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -106,7 +111,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.VerticalDivider
-import com.bori.app.data.prefs.ThemeMode
+import com.bori.theme.settings.ui.ThemeSettingsSection
 import com.bori.app.ui.adaptive.LocalWindowLayout
 import com.bori.app.ui.common.LinkRow
 import com.bori.app.ui.common.BoriTopBar
@@ -208,7 +213,7 @@ fun SettingsScreen(
 
     Scaffold(
 
-        contentWindowInsets = ShellContentInsets,
+        contentWindowInsets = ShellContentInsets, containerColor = crystalScaffoldColor(), contentColor = crystalScaffoldContentColor(),
         topBar = {
             BoriTopBar(
                 title = if (!twoPane && shown != null) shown.title else "Settings",
@@ -224,21 +229,22 @@ fun SettingsScreen(
                     .fillMaxHeight()
                     .verticalScroll(rememberScrollState()),
             ) {
-                ReadableColumn(modifier = Modifier.padding(horizontal = 16.dp)) {
-                    SettingsCategory.entries.forEach { c ->
-                        val selected = twoPane && c == shown
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (selected) MaterialTheme.colorScheme.surfaceContainerHighest else Color.Transparent)
-                                .padding(horizontal = if (twoPane) 8.dp else 0.dp),
-                        ) {
-                            LinkRow(c.title, c.summary, c.icon) { category = c }
+                ReadableColumn(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    LinkGroup {
+                        SettingsCategory.entries.forEach { c ->
+                            val selected = twoPane && c == shown
+                            Box(
+                                modifier = Modifier
+                                    .padding(horizontal = 6.dp)
+                                    .clip(MaterialTheme.shapes.medium)
+                                    .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent),
+                            ) {
+                                LinkRow(c.title, c.summary, c.icon) { category = c }
+                            }
                         }
                     }
                 }
             }
-            if (twoPane) VerticalDivider()
         }
         if (shown != null) {
         ReadableColumn(
@@ -299,35 +305,31 @@ fun SettingsScreen(
             }
 
             if (shown == SettingsCategory.APPEARANCE) {
-            // ── Theme ────────────────────────────────────────────────────────
-            CollapsibleSection(
-                title = "Theme",
-                summary = prefs.themeMode.label,
-                icon = Icons.Default.DarkMode,
-                initiallyExpanded = true,
+            // ── Theme: the Bori theme engine's Appearance cards, as in the habit tracker ──
+            // The cards pad themselves 16dp at the sides (as in the habit tracker); this page already
+            // does, so they reach out over it rather than sitting 32dp in.
+            Column(
+                Modifier.layout { measurable, constraints ->
+                    val extra = 32.dp.roundToPx()
+                    val placeable = measurable.measure(
+                        constraints.copy(
+                            minWidth = (constraints.minWidth + extra).coerceAtMost(constraints.maxWidth + extra),
+                            maxWidth = constraints.maxWidth + extra,
+                        ),
+                    )
+                    layout(constraints.maxWidth, placeable.height) { placeable.place(-extra / 2, 0) }
+                },
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ThemeMode.entries.forEach { mode ->
-                        FilterChip(
-                            selected = prefs.themeMode == mode,
-                            onClick = { viewModel.setThemeMode(mode) },
-                            label = { Text(mode.label) },
-                        )
-                    }
-                }
+                ThemeSettingsSection(
+                    settings = prefs.theme,
+                    onChange = { viewModel.setTheme(it) },
+                    onIntensityPreview = { viewModel.previewCrystalIntensity(it) },
+                    customColors = prefs.customColors,
+                    onRememberCustomColor = { viewModel.rememberCustomColor(it) },
+                    onRemoveCustomColor = { viewModel.removeCustomColor(it) },
+                )
             }
-
-            // ── Chat appearance ──────────────────────────────────────────────
-            CollapsibleSection(
-                title = "Chat appearance",
-                summary = "Bubble and send-button colour",
-                icon = Icons.Default.Palette,
-            ) {
-            ChatAppearanceSection(
-                selectedColor = prefs.chatBubbleColor,
-                onSelectColor = { viewModel.setChatBubbleColor(it) },
-            )
-            }
+            Spacer(Modifier.height(16.dp))
 
             // ── Folding (foldables only) ─────────────────────────────────────
             if (LocalContext.current.isFoldable()) {
@@ -635,7 +637,7 @@ fun SettingsScreen(
             }
 
             confirmPermanentDelete?.let { trashed ->
-                AlertDialog(
+                BoriAlertDialog(
                     onDismissRequest = { confirmPermanentDelete = null },
                     title = { Text("Permanently delete?") },
                     text = { Text("\"${trashed.name}\" will be deleted forever and cannot be recovered.") },
@@ -706,7 +708,7 @@ fun SettingsScreen(
 /** The groups Settings opens into. */
 private enum class SettingsCategory(val title: String, val summary: String, val icon: ImageVector) {
     AGENTS("Agents & models", "API keys, chat models, usage, web search, on-device AI", Icons.Default.SmartToy),
-    APPEARANCE("Appearance", "Theme and chat colours", Icons.Default.Palette),
+    APPEARANCE("Appearance", "Theme style, colours and glass", Icons.Default.Palette),
     BUILD("Build & signing", "Compiler profile, timeouts, release keystore", Icons.Default.Build),
     DATA("Backup & data", "Export, import, deleted projects", Icons.Default.Backup),
 }
@@ -1203,7 +1205,7 @@ private fun PasswordSetDialog(
     var passwordVisible by remember { mutableStateOf(false) }
     val mismatch = password.isNotEmpty() && confirm.isNotEmpty() && password != confirm
 
-    AlertDialog(
+    BoriAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Set Backup Password") },
         text = {
@@ -1263,7 +1265,7 @@ private fun PasswordEnterDialog(
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
 
-    AlertDialog(
+    BoriAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Enter Backup Password") },
         text = {
@@ -1294,60 +1296,6 @@ private fun PasswordEnterDialog(
     )
 }
 
-/** Preset chat-bubble colors. All chosen to keep white message text readable. */
-private val chatBubbleSwatches: List<Long> = listOf(
-    0xFF1A56DB, 0xFF15803D, 0xFF7C3AED, 0xFF0F766E,
-    0xFFC2410C, 0xFFBE185D, 0xFF475569, 0xFFB91C1C,
-)
-
-/**
- * Color picker for the user's chat bubbles: a FlowRow of [chatBubbleSwatches]; the active swatch
- * is ringed and shows a Check. Inserted after the Usage section.
- */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ChatAppearanceSection(
-    selectedColor: Long,
-    onSelectColor: (Long) -> Unit,
-) {
-    Text(
-        "Pick the color for your chat bubbles and send button.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(bottom = 8.dp),
-    )
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        chatBubbleSwatches.forEach { argb ->
-            val selected = argb == selectedColor
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(Color(argb))
-                    .border(
-                        width = if (selected) 3.dp else 1.dp,
-                        color = if (selected) MaterialTheme.colorScheme.onSurface
-                                else MaterialTheme.colorScheme.outlineVariant,
-                        shape = CircleShape,
-                    )
-                    .clickable { onSelectColor(argb) },
-                contentAlignment = Alignment.Center,
-            ) {
-                if (selected) {
-                    Icon(
-                        Icons.Filled.Check,
-                        contentDescription = "Selected",
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-        }
-    }
-}
 
 /**
  * Per-provider usage list: app-tracked prompt/completion/total tokens, plus a balance line for

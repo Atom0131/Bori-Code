@@ -8,7 +8,14 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import com.bori.theme.settings.BoriThemeSettings
+import com.bori.theme.settings.ui.BorikenUnlock
+import com.bori.theme.settings.ui.BorikenUnlockCounter
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -72,12 +79,23 @@ private val appNotices = listOf(
 
 /** Settings → About: the app version and the open-source notices, Linux environment first (full build only). */
 @Composable
-internal fun AboutSection() {
+internal fun AboutSection(theme: BoriThemeSettings, onThemeChange: (BoriThemeSettings) -> Unit) {
     val context = LocalContext.current
+    // The hidden Borikén edition, as in the Bori Habit Tracker: ten quick taps on the version line.
+    val unlockCounter = remember { BorikenUnlockCounter() }
+    var showUnlock by remember { mutableStateOf(false) }
+    if (showUnlock) BorikenUnlock(theme, onThemeChange) { showUnlock = false }
     val version = remember {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty()
     }
-    Text("Bori - Code $version", style = MaterialTheme.typography.bodyMedium)
+    Text(
+        "Bori - Code $version",
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+        ) { if (unlockCounter.onTap()) showUnlock = true },
+    )
     Text(
         "Bori Code is free software under the GNU GPL, version 3 or later. Open-source software in it, " +
             "each under its own license; tap one to open its source.",
