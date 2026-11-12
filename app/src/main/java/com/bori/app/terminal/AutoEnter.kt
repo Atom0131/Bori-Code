@@ -152,7 +152,7 @@ class AutoEnter(
             .map { Regex(it, RegexOption.IGNORE_CASE) }
 
         /** Working, not asking. "esc to interrupt" is Claude Code's status line while it runs. */
-        private val BUSY = Regex("Running command\\.\\.\\.|Thinking\\.\\.\\.|Working\\.\\.\\.|esc to interrupt", RegexOption.IGNORE_CASE)
+        private val BUSY = CliStatus.BUSY
 
         /** Past steps in agy's history, which can contain the same words. */
         private val HISTORY = Regex("^[?●○◦•*]\\s+(Thought for|Edited|Explored|Ran|Running)")

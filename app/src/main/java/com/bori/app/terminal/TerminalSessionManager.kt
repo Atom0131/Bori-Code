@@ -367,6 +367,23 @@ class TerminalSessionManager @Inject constructor(
     }
 
     /**
+     * The last [n] lines of tab [tabId]'s visible screen (not the scrollback), blank lines kept, so a
+     * CLI's status line and menus can be read. Main thread.
+     */
+    fun bottomLines(tabId: Int, n: Int): List<String>? {
+        val tab = _tabs.value.firstOrNull { it.id == tabId && !it.finished } ?: return null
+        val emulator = tab.session.emulator ?: return null
+        val text = emulator.screen.getSelectedText(0, 0, emulator.mColumns, emulator.mRows - 1)
+        return text.lines().map { it.trimEnd() }.dropLastWhile { it.isEmpty() }.takeLast(n)
+    }
+
+    /** Sends [keys] to tab [tabId] as typed keys, no Enter (a menu's number, Esc). */
+    fun writeKeys(tabId: Int, keys: String) {
+        val tab = _tabs.value.firstOrNull { it.id == tabId && !it.finished } ?: return
+        main.post { if (tab.session.isRunning) tab.session.write(keys) }
+    }
+
+    /**
      * Types [text] into [session], then Enter a moment later, so a TUI reading the text as a paste
      * still sees Enter as a key press. Text with line breaks goes as one (bracketed) paste, so a CLI
      * gets it as one message.

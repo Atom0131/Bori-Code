@@ -55,12 +55,73 @@ class TerminalBridge @Inject constructor(
     fun send(tabId: Int, text: String): String? {
         val tab = manager.tabs.value.firstOrNull { it.id == tabId && !it.finished } ?: return "That terminal tab is closed."
         val name = tab.agent ?: tab.command?.let { AGENTS[it] } ?: tab.title
+        val lines = manager.bottomLines(tabId, SCAN_LINES).orEmpty()
+        // Enter on a menu would pick whatever is highlighted: answer it with its buttons instead.
+        if (CliStatus.menu(lines) != null) return "$name is asking something: pick an answer above it first."
         return when (manager.agentStateMap.value[tabId]) {
-            AgentState.WORKING -> "$name is still working. Wait for it to finish, or type in the terminal."
-            AgentState.WAITING -> "$name is waiting for your approval in the terminal."
+            // A text box opened from a menu ("No, and tell Claude…") is waiting for exactly this.
+            AgentState.WAITING -> { manager.typeLine(tab.session, text); null }
+            AgentState.WORKING -> if (CliStatus.parse(lines) != null) {
+                "$name is still working. Wait for it to finish, or tap Stop."
+            } else { manager.typeLine(tab.session, text); null }
             else -> { manager.typeLine(tab.session, text); null }
         }
     }
+
+    /**
+     * What the CLI in a tab shows live: its status line while it works, or a menu waiting for an
+     * answer. [waiting] is the approval hook's word that it's asking even when no menu was read off
+     * the screen; [screenTail] then shows what it asks, so Chat can still offer Yes / No.
+     */
+    data class Live(
+        val status: CliStatus.Status? = null,
+        val menu: CliStatus.Menu? = null,
+        val waiting: Boolean = false,
+        val screenTail: List<String> = emptyList(),
+    )
+
+    /** Tab [tabId]'s live status and menu, re-read from its screen a few times a second while collected. */
+    fun live(tabId: Int): Flow<Live> = flow {
+        while (true) {
+            val lines = manager.bottomLines(tabId, SCAN_LINES)
+            if (lines == null) emit(Live()) else {
+                val menu = CliStatus.menu(lines)
+                val status = if (menu == null) CliStatus.parse(lines) else null
+                // A stale WAITING while the spinner runs again isn't a question.
+                val waiting = manager.agentStateMap.value[tabId] == AgentState.WAITING && status == null
+                emit(Live(
+                    status = status,
+                    menu = menu,
+                    waiting = waiting,
+                    screenTail = if (waiting && menu == null) {
+                        lines.map(CliStatus::clean).filter { it.isNotEmpty() }.takeLast(TAIL_LINES)
+                    } else emptyList(),
+                ))
+            }
+            delay(LIVE_POLL_MS)
+        }
+    }.flowOn(Dispatchers.Main).distinctUntilChanged()
+
+    /**
+     * Picks option [number] of the menu on tab [tabId]'s screen: presses the number, and if the same
+     * menu is still there a moment later (a list that doesn't take numbers), moves the cursor to it
+     * with the arrow keys and presses Enter.
+     */
+    suspend fun answer(tabId: Int, number: Int) {
+        val before = withContext(Dispatchers.Main) { manager.bottomLines(tabId, SCAN_LINES)?.let(CliStatus::menu) }
+        manager.writeKeys(tabId, number.toString())
+        if (before == null) return
+        delay(ANSWER_CHECK_MS)
+        val after = withContext(Dispatchers.Main) { manager.bottomLines(tabId, SCAN_LINES)?.let(CliStatus::menu) } ?: return
+        if (after.question != before.question || after.options.map { it.label } != before.options.map { it.label }) return
+        val from = after.options.indexOfFirst { it.selected }.takeIf { it >= 0 } ?: return
+        val to = after.options.indexOfFirst { it.number == number }.takeIf { it >= 0 } ?: return
+        val arrow = if (to > from) "\u001b[B" else "\u001b[A"
+        manager.writeKeys(tabId, arrow.repeat(Math.abs(to - from)) + "\r")
+    }
+
+    /** Esc: interrupts the agent mid-turn, or cancels the menu on screen. */
+    fun interrupt(tabId: Int) = manager.writeKeys(tabId, "\u001b")
 
     fun showInTerminal(tabId: Int) = manager.select(tabId)
 
@@ -121,11 +182,15 @@ class TerminalBridge @Inject constructor(
     }.flowOn(Dispatchers.IO)
 
     /** Reads a transcript as it grows: the last part once, then only what's appended. */
-    private class Follower {
+    internal class Follower {
         private var path: String? = null
         private var offset = 0L
         private var carry = ""
         private val messages = ArrayList<ChatMessageEntity>()
+        /** Tool call id → its message id, so the output can be added under it when it arrives. */
+        private val toolMessages = HashMap<String, Long>()
+        /** The last slash command's message id, for its output (a separate transcript line). */
+        private var lastCommand: Long? = null
 
         /** The messages, or null when nothing changed since the last read. */
         fun read(file: File): List<ChatMessageEntity>? {
@@ -133,6 +198,8 @@ class TerminalBridge @Inject constructor(
             if (file.path != path || length < offset) {
                 path = file.path
                 messages.clear()
+                toolMessages.clear()
+                lastCommand = null
                 carry = ""
                 offset = (length - FIRST_READ_BYTES).coerceAtLeast(0)
             }
@@ -154,10 +221,24 @@ class TerminalBridge @Inject constructor(
             return messages.toList()
         }
 
-        private fun add(role: String, content: String) {
+        private var nextId = 1L
+
+        private fun add(role: String, content: String): Long? {
             val text = content.trim()
-            if (text.isEmpty()) return
-            messages += ChatMessageEntity(id = (messages.lastOrNull()?.id ?: 0) + 1, sessionId = -1, role = role, content = text)
+            if (text.isEmpty()) return null
+            val id = nextId++
+            messages += ChatMessageEntity(id = id, sessionId = -1, role = role, content = text)
+            if (role != "tool_result") lastCommand = null
+            return id
+        }
+
+        /** Adds [output] under message [id] (a tool call's line), as the "[tool] arg" bubble shows it expanded. */
+        private fun appendTo(id: Long, output: String, error: Boolean) {
+            val i = messages.indexOfLast { it.id == id }
+            if (i < 0) return
+            val m = messages[i]
+            val head = if (error && !m.content.startsWith("⚠")) "⚠ " + m.content else m.content
+            messages[i] = m.copy(content = head + "\n" + clip(output))
         }
 
         /** One line of Claude Code's transcript (~/.claude/projects/<dir>/<session>.jsonl). */
@@ -168,21 +249,63 @@ class TerminalBridge @Inject constructor(
             val content = o.optJSONObject("message")?.opt("content") ?: return
             when (o.optString("type")) {
                 "user" -> when (content) {
-                    is String -> if (!content.trimStart().startsWith("<")) add("user", content)
-                    is JSONArray -> blocks(content).filter { it.optString("type") == "text" }
-                        .map { it.optString("text") }
-                        .filterNot { it.trimStart().startsWith("<") }
-                        .joinToString("\n")
-                        .let { add("user", it) }
+                    is String -> userText(content)
+                    is JSONArray -> {
+                        blocks(content).filter { it.optString("type") == "tool_result" }.forEach { r ->
+                            val id = toolMessages.remove(r.optString("tool_use_id")) ?: return@forEach
+                            appendTo(id, resultText(r.opt("content")), r.optBoolean("is_error"))
+                        }
+                        blocks(content).filter { it.optString("type") == "text" }
+                            .forEach { userText(it.optString("text")) }
+                    }
                 }
                 "assistant" -> if (content is JSONArray) blocks(content).forEach { b ->
                     when (b.optString("type")) {
                         "text" -> add("assistant", b.optString("text"))
+                        "thinking" -> add("thinking", b.optString("thinking"))
                         "tool_use" -> add("tool_result", toolLine(b.optString("name"), b.optJSONObject("input")))
+                            ?.let { id -> b.optString("id").takeIf { it.isNotEmpty() }?.let { toolMessages[it] = id } }
                     }
                 }
             }
         }
+
+        /**
+         * A user line: what they typed, or a slash command and its output (`<command-name>`,
+         * `<local-command-stdout>`). Other `<…>` lines are the CLI's own notes and stay hidden.
+         */
+        private fun userText(text: String) {
+            val t = text.trimStart()
+            if (!t.startsWith("<")) { add("user", text); return }
+            COMMAND_NAME.find(t)?.let { m ->
+                val args = COMMAND_ARGS.find(t)?.groupValues?.get(1)?.trim().orEmpty()
+                lastCommand = add("tool_result", "[${m.groupValues[1].trim()}] $args")
+                return
+            }
+            val out = (COMMAND_STDOUT.find(t) ?: COMMAND_STDERR.find(t))?.groupValues?.get(1)?.let(::stripAnsi)?.trim()
+            if (out.isNullOrEmpty()) return
+            val cmd = lastCommand
+            if (cmd != null && messages.lastOrNull()?.id == cmd) appendTo(cmd, out, error = COMMAND_STDERR.containsMatchIn(t))
+            else add("tool_result", "[Command output]\n" + clip(out))
+            lastCommand = null
+        }
+
+        /** A tool_result's content: a string, or text blocks (images are left out). */
+        private fun resultText(c: Any?): String = when (c) {
+            is String -> c
+            is JSONArray -> blocks(c).filter { it.optString("type") == "text" }.joinToString("\n") { it.optString("text") }
+            else -> ""
+        }.let(::stripAnsi)
+
+        /** The first [OUTPUT_LINES] lines / [OUTPUT_CHARS] characters, with a note when cut. */
+        private fun clip(text: String): String {
+            val lines = text.trimEnd().lines()
+            var out = lines.take(OUTPUT_LINES).joinToString("\n")
+            if (out.length > OUTPUT_CHARS) out = out.take(OUTPUT_CHARS)
+            return if (out.length < text.trimEnd().length) "$out\n… (more in the terminal)" else out
+        }
+
+        private fun stripAnsi(s: String) = ANSI.replace(s, "")
 
         /** One step of Antigravity's transcript (brain/<id>/.system_generated/logs/transcript.jsonl). */
         private fun agyLine(line: String) {
@@ -194,6 +317,7 @@ class TerminalBridge @Inject constructor(
                     add("user", USER_REQUEST.find(c)?.groupValues?.get(1) ?: c)
                 }
                 "PLANNER_RESPONSE" -> {
+                    add("thinking", o.optString("thinking"))
                     add("assistant", o.optString("content"))
                     val calls = o.optJSONArray("tool_calls") ?: return
                     for (i in 0 until calls.length()) {
@@ -211,7 +335,8 @@ class TerminalBridge @Inject constructor(
         private fun toolLine(name: String, input: JSONObject?): String {
             val arg = TOOL_ARGS.firstNotNullOfOrNull { k -> input?.optString(k)?.takeIf { it.isNotBlank() } }
                 ?.lineSequence()?.first()?.take(120)
-            return if (arg != null) "$name · $arg" else name
+            // "[Bash] ls -la": the form Chat's tool bubble labels ("Bash · ls -la") and opens to show output under.
+            return if (arg != null) "[$name] $arg" else "[$name]"
         }
     }
 
@@ -220,6 +345,22 @@ class TerminalBridge @Inject constructor(
         val AGENTS = mapOf("claude" to "Claude Code", "antigravity" to "Antigravity")
         const val POLL_MS = 1_000L
         const val SCREEN_POLL_MS = 700L
+        const val LIVE_POLL_MS = 400L
+
+        /** How long a pressed number gets to close its menu before the arrow keys are tried. */
+        const val ANSWER_CHECK_MS = 700L
+
+        /** Screen lines shown with the plain Yes / No card when no menu could be read. */
+        const val TAIL_LINES = 8
+        /** Screen lines read for the status line and menus: a tall menu (a plan, a question) fits. */
+        const val SCAN_LINES = 40
+        const val OUTPUT_LINES = 12
+        const val OUTPUT_CHARS = 1_500
+        val COMMAND_NAME = Regex("<command-name>([\\s\\S]*?)</command-name>")
+        val COMMAND_ARGS = Regex("<command-args>([\\s\\S]*?)</command-args>")
+        val COMMAND_STDOUT = Regex("<local-command-stdout>([\\s\\S]*?)</local-command-stdout>")
+        val COMMAND_STDERR = Regex("<local-command-stderr>([\\s\\S]*?)</local-command-stderr>")
+        val ANSI = Regex("\\u001B\\[[0-9;?]*[ -/]*[@-~]")
         const val READY_TIMEOUT_MS = 25_000L
         const val READY_QUIET_MS = 1_500L
         const val READY_MIN_MS = 2_000L

@@ -158,6 +158,7 @@ fun ChatScreen(
     val terminalTarget by viewModel.terminalTarget.collectAsState()
     val terminalMessages by viewModel.terminalMessages.collectAsState()
     val terminalScreen by viewModel.terminalScreen.collectAsState()
+    val terminalLive by viewModel.terminalLive.collectAsState()
     val agentCommands by viewModel.agentCommands.collectAsState()
     val boriMessages by viewModel.messages.collectAsState()
     // Sending to a CLI in a terminal tab: its conversation instead of Bori's.
@@ -754,6 +755,32 @@ fun ChatScreen(
                             .padding(horizontal = 12.dp, vertical = 4.dp),
                     )
                 }
+                if (terminalTarget != null) {
+                    terminalLive.menu?.let { menu ->
+                        CliMenuCard(
+                            agent = terminalTarget!!.agent,
+                            menu = menu,
+                            onPick = { viewModel.answerTerminal(it) },
+                            onCancel = { viewModel.interruptTerminal() },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        )
+                    } ?: if (terminalLive.waiting) {
+                        CliAskFallbackCard(
+                            agent = terminalTarget!!.agent,
+                            screen = terminalLive.screenTail,
+                            onYes = { viewModel.answerTerminal(1) },
+                            onNo = { viewModel.interruptTerminal() },
+                            onShowTerminal = { viewModel.showTargetInTerminal(); onOpenTerminal() },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        )
+                    } else terminalLive.status?.let { status ->
+                        CliStatusRow(
+                            status = status,
+                            onStop = { viewModel.interruptTerminal() },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        )
+                    }
+                }
                 if (slashSuggestions.isNotEmpty()) {
                     SlashCommandList(
                         commands = slashSuggestions,
@@ -841,6 +868,7 @@ fun ChatScreen(
                     TerminalTargetBar(
                         targets = terminalTargets,
                         chosen = terminalTarget,
+                        live = terminalLive,
                         startable = startableAgents,
                         onChoose = { viewModel.chooseTerminalTarget(it) },
                         onOpenTerminal = { viewModel.showTargetInTerminal(); onOpenTerminal() },
@@ -1222,6 +1250,7 @@ private fun MessageBubble(
 ) {
     when {
         message.role == "tool_result" -> ToolResultBubble(content = message.content)
+        message.role == "thinking"    -> ThinkingBubble(content = message.content)
         message.role == "user"        -> UserBubble(content = message.content, bubbleColor = bubbleColor, isFirstInGroup = isFirstInGroup, isLastInGroup = isLastInGroup)
         else                          -> AssistantBubble(content = message.content, isFirstInGroup = isFirstInGroup, isLastInGroup = isLastInGroup)
     }
@@ -2070,6 +2099,7 @@ private fun agentGroupOrder(provider: AiProvider): Int = when {
 private fun TerminalTargetBar(
     targets: List<com.bori.app.terminal.TerminalBridge.Target>,
     chosen: com.bori.app.terminal.TerminalBridge.Target?,
+    live: com.bori.app.terminal.TerminalBridge.Live,
     startable: List<com.bori.app.terminal.TerminalBridge.Startable>,
     onChoose: (Int?) -> Unit,
     onOpenTerminal: () -> Unit,
@@ -2113,14 +2143,17 @@ private fun TerminalTargetBar(
             }
         }
         if (chosen != null) {
-            val waiting = chosen.state == com.bori.app.service.StatusNotifier.AgentState.WAITING
+            val waiting = live.menu != null || chosen.state == com.bori.app.service.StatusNotifier.AgentState.WAITING
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    when (chosen.state) {
-                        com.bori.app.service.StatusNotifier.AgentState.WORKING -> "${chosen.agent} is working…"
-                        com.bori.app.service.StatusNotifier.AgentState.WAITING -> "${chosen.agent} is asking for your approval in the terminal"
-                        com.bori.app.service.StatusNotifier.AgentState.DONE -> "${chosen.agent} is done. Your turn."
-                        null -> "Typed into ${chosen.title}, as if you typed it in the terminal"
+                    when {
+                        // The same words the terminal shows ("Flabbergasting…"), not a fixed "working".
+                        live.menu != null -> "${chosen.agent} is asking you. Answer below or in the terminal."
+                        live.status != null -> "${chosen.agent}: ${live.status.verb}"
+                        chosen.state == com.bori.app.service.StatusNotifier.AgentState.WORKING -> "${chosen.agent} is working…"
+                        chosen.state == com.bori.app.service.StatusNotifier.AgentState.WAITING -> "${chosen.agent} is waiting for you in the terminal"
+                        chosen.state == com.bori.app.service.StatusNotifier.AgentState.DONE -> "${chosen.agent} is done. Your turn."
+                        else -> "Typed into ${chosen.title}, as if you typed it in the terminal"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = if (waiting) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2253,5 +2286,220 @@ private fun TerminalTargetEmpty(target: com.bori.app.terminal.TerminalBridge.Tar
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
+    }
+}
+
+/** A coding CLI's thinking, mirrored from its transcript: folded to "Thought" like the CLI shows it. */
+@Composable
+private fun ThinkingBubble(content: String) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 56.dp, top = 2.dp, bottom = 2.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .clickable { expanded = !expanded }
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("✻", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
+            Text(
+                if (expanded) "Thought" else "Thought · " + content.lineSequence().first().take(80),
+                style = MaterialTheme.typography.labelMedium,
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Icon(
+                if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = if (expanded) "Hide thinking" else "Show thinking",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (expanded) {
+            Text(
+                content,
+                style = MaterialTheme.typography.bodySmall,
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 18.dp, top = 4.dp),
+            )
+        }
+    }
+}
+
+/**
+ * The CLI's live status line, as the terminal shows it: its spinner, its word for what it's doing
+ * ("Flabbergasting…"), the time and tokens, and the tip under it. Stop is the terminal's Esc.
+ */
+@Composable
+private fun CliStatusRow(
+    status: com.bori.app.terminal.CliStatus.Status,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var frame by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) { kotlinx.coroutines.delay(120); frame++ }
+    }
+    val glyphs = "·✢✳✶✻✽✻✶✳✢"
+    ChatPanel(
+        modifier = modifier,
+        fill = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tier = PanelTier.TILE,
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                glyphs[frame % glyphs.length].toString(),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.widthIn(min = 18.dp),
+            )
+            Spacer(Modifier.size(8.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        status.verb,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                    )
+                    status.detail?.let {
+                        Text(
+                            "  $it",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                status.tip?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            TextButton(onClick = onStop) {
+                Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(4.dp))
+                Text("Stop")
+            }
+        }
+    }
+}
+
+/**
+ * The CLI asks (its approval hook said so) but its menu couldn't be read off the screen: show the
+ * screen's last lines and answer the usual way, Yes presses 1 and No presses Esc.
+ */
+@Composable
+private fun CliAskFallbackCard(
+    agent: String,
+    screen: List<String>,
+    onYes: () -> Unit,
+    onNo: () -> Unit,
+    onShowTerminal: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val notice = noticeColors(NoticeTone.ASK)
+    ChatPanel(modifier = modifier, fill = notice.fill, contentColor = notice.text, tier = PanelTier.CARD) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("$agent is asking for your approval", style = MaterialTheme.typography.labelMedium, color = notice.tint)
+            if (screen.isNotEmpty()) {
+                Text(
+                    screen.joinToString("\n"),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = notice.text,
+                    modifier = Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onYes, modifier = Modifier.weight(1f)) { Text("Yes") }
+                OutlinedButton(onClick = onNo, modifier = Modifier.weight(1f)) { Text("No") }
+            }
+            TextButton(onClick = onShowTerminal, modifier = Modifier.align(Alignment.End)) { Text("Show terminal") }
+        }
+    }
+}
+
+/**
+ * A menu the CLI shows in the terminal (an approval, a question, a plan to accept), answered from Chat:
+ * each button presses its number in the terminal, Cancel presses Esc. The terminal shows the same menu.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CliMenuCard(
+    agent: String,
+    menu: com.bori.app.terminal.CliStatus.Menu,
+    onPick: (Int) -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val notice = noticeColors(NoticeTone.ASK)
+    ChatPanel(modifier = modifier, fill = notice.fill, contentColor = notice.text, tier = PanelTier.CARD) {
+        Column(
+            modifier = Modifier
+                .padding(14.dp)
+                .heightIn(max = 360.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("$agent asks", style = MaterialTheme.typography.labelMedium, color = notice.tint)
+            menu.subject?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = notice.text,
+                    maxLines = 6,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(menu.question, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = notice.text)
+            menu.options.forEach { o ->
+                val label = "${o.number}. ${o.label}"
+                if (o.number == 1) {
+                    Button(onClick = { onPick(o.number) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(label, modifier = Modifier.fillMaxWidth(), maxLines = 3)
+                    }
+                } else {
+                    OutlinedButton(onClick = { onPick(o.number) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(label, modifier = Modifier.fillMaxWidth(), maxLines = 3)
+                    }
+                }
+                o.description?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = notice.text.copy(alpha = 0.75f),
+                        modifier = Modifier.padding(start = 12.dp),
+                    )
+                }
+            }
+            if (menu.options.any { it.asksText }) {
+                Text(
+                    "Picking an answer that asks for text opens a box in the terminal: type it below and send.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = notice.text.copy(alpha = 0.75f),
+                )
+            }
+            TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.End)) {
+                Text(if (menu.canCancel) "Cancel (Esc)" else "Esc")
+            }
+        }
     }
 }

@@ -1,0 +1,165 @@
+package com.bori.app.terminal
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class CliStatusTest {
+    private fun screen(s: String) = s.trimIndent().lines()
+
+    @Test fun claudeSpinnerWithDetail() {
+        val st = CliStatus.parse(screen("""
+            ⏺ I'll look at the build file first.
+
+            ✻ Flabbergasting… (12s · ↑ 1.2k tokens · esc to interrupt)
+
+            ╭──────────────────────────────╮
+            │ >                            │
+            ╰──────────────────────────────╯
+        """))!!
+        assertEquals("Flabbergasting…", st.verb)
+        assertEquals("12s · ↑ 1.2k tokens", st.detail)
+    }
+
+    @Test fun everyGlyphAndVerb() {
+        for (g in listOf("·", "✢", "✳", "✶", "✻", "✽", "*")) {
+            for (v in listOf("Thinking…", "Pondering...", "Clauding…", "Compacting conversation…")) {
+                assertEquals(v, CliStatus.parse(listOf("$g $v (esc to interrupt)"))?.verb)
+            }
+        }
+    }
+
+    @Test fun noParensAndTip() {
+        val st = CliStatus.parse(screen("""
+            ✶ Thinking…
+              ⎿  Tip: Use /memory to edit what Claude remembers
+        """))!!
+        assertEquals("Thinking…", st.verb)
+        assertNull(st.detail)
+        assertEquals("Tip: Use /memory to edit what Claude remembers", st.tip)
+    }
+
+    @Test fun keyHintsAreDropped() {
+        val st = CliStatus.parse(listOf("✳ Cooking… (3m 2s · ↓ 4.1k tokens · thinking · esc to interrupt · ctrl+t to show todos)"))!!
+        assertEquals("3m 2s · ↓ 4.1k tokens · thinking", st.detail)
+    }
+
+    @Test fun messageBulletAndDoneLineAreNotStatus() {
+        assertNull(CliStatus.parse(screen("""
+            ⏺ Done… the build passes now.
+            ✻ Worked for 1m 3s
+            >
+        """)))
+    }
+
+    @Test fun otherCliFallback() {
+        assertEquals("Running command...", CliStatus.parse(listOf("  Running command... (esc to interrupt)"))?.verb)
+    }
+
+    @Test fun idlePromptIsNothing() {
+        assertNull(CliStatus.parse(screen("""
+            ⏺ All done.
+            >
+        """)))
+    }
+
+    @Test fun bashApprovalMenu() {
+        val m = CliStatus.menu(screen("""
+            ╭───────────────────────────────────────────────╮
+            │ Bash command                                  │
+            │                                               │
+            │   ./gradlew assembleDebug                     │
+            │   Build the debug APK                         │
+            │                                               │
+            │ Do you want to proceed?                       │
+            │ ❯ 1. Yes                                      │
+            │   2. Yes, and don't ask again for ./gradlew   │
+            │   3. No, and tell Claude what to do (esc)     │
+            ╰───────────────────────────────────────────────╯
+        """))!!
+        assertEquals("Do you want to proceed?", m.question)
+        assertEquals("./gradlew assembleDebug\nBuild the debug APK", m.subject)
+        assertEquals(listOf(1, 2, 3), m.options.map { it.number })
+        assertEquals("Yes", m.options[0].label)
+        assertTrue(m.options[0].selected)
+        assertTrue(m.options[2].asksText)
+    }
+
+    @Test fun questionMenuWithDescriptionsAndFooter() {
+        val m = CliStatus.menu(screen("""
+             ☐ Library
+
+            Which chart library should I use?
+
+            ❯ 1. Vico
+                 Compose-first, small
+              2. MPAndroidChart
+                 Older, View based
+              3. Type something.
+
+            Enter to select · ↑/↓ to navigate · Esc to cancel
+        """))!!
+        assertEquals("Which chart library should I use?", m.question)
+        assertEquals("Compose-first, small", m.options[0].description)
+        assertEquals("Older, View based", m.options[1].description)
+        assertTrue(m.options[2].asksText)
+        assertTrue(m.canCancel)
+    }
+
+    @Test fun numberedListInTextIsNotAMenu() {
+        assertNull(CliStatus.menu(screen("""
+            ⏺ Here's the plan:
+              1. Add the screen
+              2. Wire the view model
+            >
+        """)))
+    }
+
+    @Test fun menuMustStartAtOne() {
+        assertNull(CliStatus.menu(screen("""
+            Pick one?
+            ❯ 2. B
+              3. C
+        """)))
+    }
+
+    @Test fun unboxedPermissionPromptWithRules() {
+        val m = CliStatus.menu(screen("""
+            ⏺ Bash(./gradlew test)
+            ────────────────────────────────────────────────
+             Bash command
+
+               ./gradlew test
+               Run the unit tests
+
+             Do you want to proceed?
+             ❯ 1. Yes
+               2. Yes, and don't ask again for ./gradlew commands in
+                  /root/workspace/app
+               3. No, and tell Claude what to do differently (esc)
+
+             Esc to cancel · Tab to amend · ctrl+e to explain
+        """))!!
+        assertEquals("Do you want to proceed?", m.question)
+        assertEquals("./gradlew test\nRun the unit tests", m.subject)
+        assertEquals(3, m.options.size)
+        assertEquals("/root/workspace/app", m.options[1].description)
+        assertTrue(m.canCancel)
+    }
+
+    @Test fun blankLinesBetweenQuestionAndOptions() {
+        val m = CliStatus.menu(screen("""
+            Accept this plan?
+
+
+            ❯ 1. Yes, and auto-accept edits
+
+              2. Yes, and manually approve edits
+
+              3. No, keep planning
+        """))!!
+        assertEquals("Accept this plan?", m.question)
+        assertEquals(3, m.options.size)
+    }
+}

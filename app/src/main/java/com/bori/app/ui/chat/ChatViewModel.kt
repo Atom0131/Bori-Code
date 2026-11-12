@@ -156,6 +156,22 @@ class ChatViewModel @Inject constructor(
             .flatMapLatest { id -> if (id == null) flowOf(null) else terminalBridge.screen(id) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** The chosen CLI's live status line ("Flabbergasting… · 12s") and any menu it shows, from its screen. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val terminalLive: StateFlow<com.bori.app.terminal.TerminalBridge.Live> =
+        terminalTarget.map { it?.tabId }.distinctUntilChanged()
+            .flatMapLatest { id -> if (id == null) flowOf(com.bori.app.terminal.TerminalBridge.Live()) else terminalBridge.live(id) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.bori.app.terminal.TerminalBridge.Live())
+
+    /** Picks option [number] of the menu the terminal CLI shows. */
+    fun answerTerminal(number: Int) {
+        val tabId = terminalTarget.value?.tabId ?: return
+        viewModelScope.launch { terminalBridge.answer(tabId, number) }
+    }
+
+    /** Esc in the terminal CLI: stop its turn, or cancel its menu. */
+    fun interruptTerminal() { terminalTarget.value?.let { terminalBridge.interrupt(it.tabId) } }
+
     private val _agentCommands = MutableStateFlow<List<com.bori.app.terminal.SlashCommand>>(emptyList())
     /** The "/" commands of the agent Chat sends to: the terminal CLI's, or Bori agent's own. */
     val agentCommands: StateFlow<List<com.bori.app.terminal.SlashCommand>> = _agentCommands.asStateFlow()
