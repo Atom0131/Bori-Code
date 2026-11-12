@@ -1,6 +1,7 @@
 package com.bori.app.ui.editor
 
 import com.bori.theme.util.BoriDropdownMenu
+import com.bori.theme.components.crystalChromeSurface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -68,7 +69,7 @@ fun BottomPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(6.dp)
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .crystalChromeSurface(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .pointerInput(panelHeight) {
                     detectVerticalDragGestures { _, dragAmount ->
                         val deltaDp = with(density) { (-dragAmount).toDp().value.toInt() }
@@ -82,7 +83,7 @@ fun BottomPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(32.dp)
-                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .crystalChromeSurface(MaterialTheme.colorScheme.surfaceContainerLow)
                 .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

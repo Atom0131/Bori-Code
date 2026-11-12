@@ -1,6 +1,7 @@
 ﻿package com.bori.app.ui.editor
 
 import androidx.compose.foundation.background
+import com.bori.theme.components.crystalChromeSurface
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
@@ -38,7 +39,7 @@ fun ShortcutBar(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .crystalChromeSurface(MaterialTheme.colorScheme.surfaceVariant)
             .height(48.dp)
             .horizontalScroll(rememberScrollState()),
     ) {

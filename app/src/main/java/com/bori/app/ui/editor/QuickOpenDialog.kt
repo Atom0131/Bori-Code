@@ -1,6 +1,9 @@
 package com.bori.app.ui.editor
 
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import com.bori.theme.components.crystalScaffoldColor
+import com.bori.theme.components.CrystalWindowContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -90,8 +93,12 @@ fun QuickOpenDialog(
     }
 
     Dialog(onDismissRequest = onDismiss) {
+        // A window paints its own glass field under Crystal (as BoriAlertDialog does); flat otherwise.
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))) { CrystalWindowContent {
         Surface(
             shape = RoundedCornerShape(12.dp),
+            color = crystalScaffoldColor(MaterialTheme.colorScheme.surfaceContainerHigh),
+            contentColor = MaterialTheme.colorScheme.onSurface,
             tonalElevation = 6.dp,
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -175,6 +182,7 @@ fun QuickOpenDialog(
                 }
             }
         }
+        } }
     }
 
     LaunchedEffect(Unit) {

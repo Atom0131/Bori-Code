@@ -1,6 +1,8 @@
 package com.bori.app.ui.editor
 
 import com.bori.app.ui.common.GlassCard
+import com.bori.theme.components.isCrystal
+import com.bori.theme.components.crystalChromeSurface
 import com.bori.theme.util.BoriAlertDialog
 import com.bori.theme.util.BoriDropdownMenu
 import com.bori.theme.components.CrystalBar
@@ -630,7 +632,7 @@ fun EditorScreen(
                         Box(
                             modifier = sidebarModifier
                                 .fillMaxHeight()
-                                .background(MaterialTheme.colorScheme.surfaceContainerLow),
+                                .crystalChromeSurface(MaterialTheme.colorScheme.surfaceContainerLow),
                         ) {
                             Column(modifier = Modifier.fillMaxSize()) {
                                 // Panel header
@@ -638,7 +640,7 @@ fun EditorScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(36.dp)
-                                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                        .background(crystalScaffoldColor(MaterialTheme.colorScheme.surfaceContainerLow))
                                         .padding(horizontal = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
@@ -982,7 +984,7 @@ fun EditorScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(28.dp)
-                                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                    .crystalChromeSurface(MaterialTheme.colorScheme.surfaceContainerLow)
                                     .clickable { isBottomPanelVisible = true }
                                     .padding(horizontal = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1170,11 +1172,14 @@ private fun StatusBar(
         line to col
     }
 
+    // Under Crystal the bar is tinted glass like the rest of the editor's chrome; a solid accent strip elsewhere.
+    val crystal = isCrystal()
+    val barText = if (crystal) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onPrimary
     Row(
         modifier = modifier
             .fillMaxWidth()
             .height(24.dp)
-            .background(MaterialTheme.colorScheme.primary)
+            .crystalChromeSurface(if (crystal) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.primary)
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1182,7 +1187,7 @@ private fun StatusBar(
             Text(
                 text = "✕ $errCount",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimary,
+                color = barText,
             )
             Spacer(Modifier.width(10.dp))
         }
@@ -1190,7 +1195,7 @@ private fun StatusBar(
             Text(
                 text = "⚠ $warnCount",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimary,
+                color = barText,
             )
         }
         Spacer(Modifier.weight(1f))
@@ -1198,7 +1203,7 @@ private fun StatusBar(
             Text(
                 text = projectName,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimary,
+                color = barText,
             )
             Spacer(Modifier.width(12.dp))
         }
@@ -1206,7 +1211,7 @@ private fun StatusBar(
             Text(
                 text = editorState!!.language.replaceFirstChar { it.uppercase() },
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimary,
+                color = barText,
             )
             Spacer(Modifier.width(12.dp))
         }
@@ -1214,7 +1219,7 @@ private fun StatusBar(
             Text(
                 text = "Ln $lineNum, Col $colNum",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimary,
+                color = barText,
             )
         }
     }

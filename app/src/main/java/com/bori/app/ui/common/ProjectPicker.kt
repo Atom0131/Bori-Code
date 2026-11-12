@@ -1,6 +1,7 @@
 package com.bori.app.ui.common
 
 import com.bori.theme.util.BoriSheet
+import com.bori.theme.components.crystalListItemColors
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -109,6 +110,7 @@ fun ProjectPickerSheet(
                     val isActive = project.id == activeId
                     val language = if (project.template.name.endsWith("_KOTLIN")) "Kotlin" else "Java"
                     ListItem(
+                        colors = crystalListItemColors(),
                         headlineContent = { Text(project.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         supportingContent = {
                             Text(

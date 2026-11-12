@@ -1,6 +1,7 @@
 package com.bori.app.ui.editor
 
 import androidx.compose.foundation.background
+import com.bori.theme.components.crystalChromeSurface
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -31,7 +32,7 @@ fun ActivityBar(
         modifier = modifier
             .width(48.dp)
             .fillMaxHeight()
-            .background(MaterialTheme.colorScheme.surfaceContainer),
+            .crystalChromeSurface(MaterialTheme.colorScheme.surfaceContainer),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(Modifier.height(4.dp))

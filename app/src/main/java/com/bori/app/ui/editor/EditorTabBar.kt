@@ -1,6 +1,7 @@
 package com.bori.app.ui.editor
 
 import androidx.compose.foundation.background
+import com.bori.theme.components.crystalChromeSurface
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
@@ -46,7 +47,7 @@ fun EditorTabBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(36.dp)
-                .background(MaterialTheme.colorScheme.surfaceContainer),
+                .crystalChromeSurface(MaterialTheme.colorScheme.surfaceContainer),
         ) {
             Row(
                 modifier = Modifier
