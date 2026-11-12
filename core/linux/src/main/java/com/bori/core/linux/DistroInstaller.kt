@@ -387,6 +387,7 @@ class DistroInstaller @Inject constructor(
      * without a list, or a check that fails, keeps Chat's built-in list; the install still succeeded.
      */
     private suspend fun checkCommands(distroId: String, cli: CodingCli) {
+        if (cli.tool) return
         val program = cli.command.trim().substringBefore(' ').substringAfterLast('/')
         val probes = CliCommands.probes(program)
         if (probes.isEmpty()) return

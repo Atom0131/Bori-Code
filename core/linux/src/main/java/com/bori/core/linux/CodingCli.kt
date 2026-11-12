@@ -29,6 +29,7 @@ class CodingCli(
         LABS("From the AI labs"),
         OPEN("Open source, any provider"),
         CHINA("Chinese models"),
+        TOOLS("Coding tools"),
         CUSTOM("Your own programs"),
     }
 
@@ -47,15 +48,22 @@ class CodingCli(
 
         /** The user's own program file, copied into /usr/local/bin by [DistroInstaller.addProgramFile]. */
         data object Uploaded : Installer
+
+        /** Distro packages (a coding tool such as pip or gcc), by distro id; installed with its package manager. */
+        data class Packages(val byDistro: Map<String, String>) : Installer
     }
 
     val custom: Boolean get() = group == Group.CUSTOM
+
+    /** A coding tool from the distro's packages, not a CLI agent: no Open, no Remove (other things may need it). */
+    val tool: Boolean get() = installer is Installer.Packages
 
     /** The program [command] starts, for the installed check (`node ~/x.js` -> `node`). */
     val program: String get() = command.trim().substringBefore(' ')
 
     /** Whether it's offered in [distro] at all. */
-    fun availableIn(distro: Distro): Boolean = (distroId == null || distroId == distro.id) && (musl || !distro.musl)
+    fun availableIn(distro: Distro): Boolean = (distroId == null || distroId == distro.id) && (musl || !distro.musl) &&
+        (installer !is Installer.Packages || distro.id in installer.byDistro)
 
     /** Bori Code runs the install/update script for these; uploads and "by command" ones have none. */
     val installable: Boolean
@@ -72,6 +80,7 @@ class CodingCli(
             Installer.Antigravity -> "set -e; rm -f /usr/local/bin/antigravity"
             is Installer.Custom -> i.uninstall.ifBlank { "true" }
             Installer.Uploaded -> "set -e; rm -f /usr/local/bin/$program"
+            is Installer.Packages -> "true"
         }
 
     /**
@@ -116,6 +125,11 @@ class CodingCli(
         }
         is Installer.Custom -> i.install
         Installer.Uploaded -> error("$title is a program file; add it again to replace it")
+        is Installer.Packages -> """
+            set -e
+            ${distro.installPackages} ${i.byDistro[distro.id] ?: error("$title isn't offered in ${distro.name}")}
+            command -v $program
+        """.trimIndent()
     }
 
     private data class Manifest(val version: String, val url: String, val sha512: String)
@@ -257,7 +271,43 @@ class CodingCli(
         )
 
         /** A built-in by id; the user's own CLIs come from [CustomCliStore.get]. */
-        fun get(id: String): CodingCli? = builtIns.firstOrNull { it.id == id }
+        fun get(id: String): CodingCli? = builtIns.firstOrNull { it.id == id } ?: tools.firstOrNull { it.id == id }
+
+        private fun tool(id: String, title: String, program: String, summary: String, void: String, alpine: String, artix: String) =
+            CodingCli(
+                id = id, title = title, command = program, summary = summary, group = Group.TOOLS,
+                installer = Installer.Packages(mapOf("void" to void, "alpine" to alpine, "artix" to artix)),
+            )
+
+        /**
+         * Tools a coding agent often reaches for and stops without ("pip: command not found"). Not
+         * agents: they never show up in Chat or the terminal's agent list. Each distro's own packages.
+         */
+        val tools: List<CodingCli> = listOf(
+            tool("tool-pip", "Python pip", "pip3", "Installs Python packages (pip install …).", "python3-pip", "py3-pip", "python-pip"),
+            tool("tool-uv", "uv", "uv", "Fast Python package and project manager.", "uv", "uv", "uv"),
+            tool("tool-cc", "C/C++ compiler and make", "gcc", "gcc, g++ and make, for native modules and C projects.", "base-devel", "build-base", "base-devel"),
+            tool("tool-cmake", "CMake", "cmake", "Build system many C/C++ projects use.", "cmake", "cmake", "cmake"),
+            tool("tool-go", "Go", "go", "The Go toolchain.", "go", "go", "go"),
+            tool("tool-rust", "Rust and Cargo", "cargo", "The Rust compiler and its package manager.", "rust cargo", "rust cargo", "rust"),
+            tool("tool-jq", "jq", "jq", "Reads and edits JSON on the command line.", "jq", "jq", "jq"),
+        )
+
+        /** One install for every tool in [missing], for "Install all missing". */
+        fun toolsBundle(missing: List<CodingCli>): CodingCli = CodingCli(
+            id = TOOLS_BUNDLE_ID,
+            title = "Coding tools",
+            command = missing.first().program,
+            summary = "",
+            group = Group.TOOLS,
+            installer = Installer.Packages(
+                listOf("void", "alpine", "artix").associateWith { d ->
+                    missing.mapNotNull { (it.installer as? Installer.Packages)?.byDistro?.get(d) }.joinToString(" ")
+                },
+            ),
+        )
+
+        const val TOOLS_BUNDLE_ID = "tool-all"
 
         /**
          * Prints `id<TAB>version` (or `id<TAB>` when missing) for each of [clis], in one guest start

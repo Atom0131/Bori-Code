@@ -42,6 +42,8 @@ data class DistroRow(
     val sizeBytes: Long?,
     /** Empty unless the distro is installed. */
     val clis: List<CliRow> = emptyList(),
+    /** Coding tools (pip, gcc, …) in it; empty unless installed. */
+    val tools: List<CliRow> = emptyList(),
     /** The GitHub account signed in inside it; null when not signed in. Ignored while [githubChecked] is false. */
     val githubLogin: String? = null,
     val githubChecked: Boolean = false,
@@ -110,7 +112,12 @@ class LinuxSetupViewModel @Inject constructor(
             val status = installer.status(d.id)
             if (!d.offered && status == DistroStatus.NOT_INSTALLED) return@mapNotNull null
             val clis = if (status == DistroStatus.INSTALLED) clisFor(d).map { CliRow(it, null, checked = false) } else emptyList()
-            DistroRow(d, status, isDefault = d.id == default, sizeBytes = null, clis = clis)
+            val tools = if (status == DistroStatus.INSTALLED) {
+                CodingCli.tools.filter { it.availableIn(d) }.map { CliRow(it, null, checked = false) }
+            } else {
+                emptyList()
+            }
+            DistroRow(d, status, isDefault = d.id == default, sizeBytes = null, clis = clis, tools = tools)
         }
         _rows.value = rows
         _freeBytes.value = installer.freeBytes()
@@ -123,9 +130,12 @@ class LinuxSetupViewModel @Inject constructor(
         // One guest start per distro checks every CLI (about a second, plus each installed CLI's --version).
         viewModelScope.launch {
             rows.filter { it.status == DistroStatus.INSTALLED }.forEach { row ->
-                val versions = installer.cliVersions(row.distro.id, row.clis.map { it.cli })
+                val versions = installer.cliVersions(row.distro.id, (row.clis + row.tools).map { it.cli })
                 updateRow(row.distro.id) { r ->
-                    r.copy(clis = r.clis.map { it.copy(version = versions[it.cli.id], checked = true) })
+                    r.copy(
+                        clis = r.clis.map { it.copy(version = versions[it.cli.id], checked = true) },
+                        tools = r.tools.map { it.copy(version = versions[it.cli.id], checked = true) },
+                    )
                 }
                 val login = installer.githubLogin(row.distro.id)
                 updateRow(row.distro.id) { it.copy(githubLogin = login, githubChecked = true) }
@@ -204,6 +214,13 @@ class LinuxSetupViewModel @Inject constructor(
     }
 
     fun installCli(distroId: String, cli: CodingCli) = installer.installCli(distroId, cli)
+
+    /** Installs every coding tool [distroId] doesn't have yet, in one package-manager run. */
+    fun installMissingTools(distroId: String) {
+        val missing = _rows.value.firstOrNull { it.distro.id == distroId }?.tools
+            ?.filter { it.checked && it.version == null }?.map { it.cli }.orEmpty()
+        if (missing.isNotEmpty()) installer.installCli(distroId, CodingCli.toolsBundle(missing))
+    }
 
     fun removeCli(distroId: String, cli: CodingCli) = installer.removeCli(distroId, cli)
 

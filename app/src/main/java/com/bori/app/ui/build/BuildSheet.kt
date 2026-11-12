@@ -59,9 +59,12 @@ fun BuildSheet(
     onViewLogs: () -> Unit = {},
 ) {
     // Folding moves Bori to the other display, and the sheet's own window doesn't follow it: the sheet
-    // vanished while still "open". A new sheet per screen size puts it back on the display in use.
+    // vanished while still "open". A new sheet per display puts it back on the one in use. Keyed on the
+    // smallest width (it changes when folding, not when rotating): keying on width/height made a loop in
+    // landscape, where the sheet's own window nudged the height, which made a new sheet, and so on, so
+    // the progress bar flashed and froze until the phone was rotated.
     val configuration = LocalConfiguration.current
-    key(configuration.screenWidthDp, configuration.screenHeightDp) {
+    key(configuration.smallestScreenWidthDp) {
         BuildSheetContent(viewModel, onDismiss, onViewLogs)
     }
 }

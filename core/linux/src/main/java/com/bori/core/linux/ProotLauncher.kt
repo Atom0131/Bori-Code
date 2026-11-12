@@ -6,6 +6,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -140,7 +141,7 @@ class ProotLauncher @Inject constructor(
             // env -i: the host's variables must not leak into the guest.
             add("/usr/bin/env")
             add("-i")
-            (defaultGuestEnv() + guestEnv).forEach { (k, v) -> add("$k=$v") }
+            (defaultGuestEnv(rootfs) + guestEnv).forEach { (k, v) -> add("$k=$v") }
             addAll(guestArgv)
         }
 
@@ -151,8 +152,10 @@ class ProotLauncher @Inject constructor(
         return HostCommand(proot, argv, env, linuxDir.absolutePath)
     }
 
-    private fun defaultGuestEnv(): Map<String, String> = linkedMapOf(
+    private fun defaultGuestEnv(rootfs: File): Map<String, String> = linkedMapOf(
         "HOME" to GUEST_HOME,
+        // The phone's clock zone: without it the guest falls back to UTC.
+        "TZ" to guestTimeZone(rootfs),
         "USER" to "root",
         "TERM" to "xterm-256color",
         "COLORTERM" to "truecolor",
@@ -162,7 +165,28 @@ class ProotLauncher @Inject constructor(
         "PATH" to GUEST_PATH,
     )
 
+    /**
+     * The phone's zone by name when the guest has tzdata for it, or else as a POSIX fixed offset
+     * ("<-06>6": POSIX counts west as positive), which needs no tzdata but won't follow DST.
+     */
+    private fun guestTimeZone(rootfs: File): String {
+        val zone = TimeZone.getDefault()
+        if (guestFileExists(rootfs, "usr/share/zoneinfo/${zone.id}")) return zone.id
+        return posixOffset(zone.getOffset(System.currentTimeMillis()))
+    }
+
     companion object {
+        /** A POSIX TZ for a fixed [offsetMs] east of UTC: -6 h gives "<-06>6", +5:30 gives "<+0530>-5:30". */
+        fun posixOffset(offsetMs: Int): String {
+            val minutes = offsetMs / 60_000
+            val sign = if (minutes < 0) "-" else "+"
+            val h = Math.abs(minutes) / 60
+            val m = Math.abs(minutes) % 60
+            val name = "<$sign%02d${if (m != 0) "%02d".format(m) else ""}>".format(h)
+            val posix = (if (minutes > 0) "-" else "") + h + (if (m != 0) ":%02d".format(m) else "")
+            return name + posix
+        }
+
         private const val KEY_DEFAULT_DISTRO = "default_distro"
 
         const val GUEST_HOME = "/root"

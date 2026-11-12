@@ -67,7 +67,7 @@ object DistroCatalog {
             set -e
             xbps-install -Syuy xbps
             xbps-install -Syuy
-            xbps-install -y bash nodejs git github-cli ripgrep curl ca-certificates openssh python3
+            xbps-install -y bash nodejs git github-cli ripgrep curl ca-certificates openssh python3 python3-pip tzdata
             xbps-remove -Oy
         """.trimIndent(),
         installedSizeMb = 700,
@@ -94,7 +94,7 @@ object DistroCatalog {
             set -e
             apk update
             apk upgrade
-            apk add bash nodejs npm git github-cli ripgrep curl ca-certificates openssh-client python3
+            apk add bash nodejs npm git github-cli ripgrep curl ca-certificates openssh-client python3 py3-pip tzdata
         """.trimIndent(),
         installedSizeMb = 200,
         musl = true,
@@ -127,7 +127,7 @@ object DistroCatalog {
         setupScript = """
             set -e
             pacman -Syu --noconfirm
-            pacman -S --needed --noconfirm bash nodejs npm git github-cli ripgrep curl ca-certificates openssh python base-devel
+            pacman -S --needed --noconfirm bash nodejs npm git github-cli ripgrep curl ca-certificates openssh python python-pip base-devel tzdata
             cd /tmp && rm -rf bori-yay && mkdir bori-yay && cd bori-yay
             curl -fL --progress-bar -o yay.tar.gz '$YAY_URL'
             echo '$YAY_SHA256  yay.tar.gz' | sha256sum -c -
