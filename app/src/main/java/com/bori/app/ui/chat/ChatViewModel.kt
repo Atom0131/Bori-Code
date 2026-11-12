@@ -164,9 +164,31 @@ class ChatViewModel @Inject constructor(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.bori.app.terminal.TerminalBridge.Live())
 
     /** Picks option [number] of the menu the terminal CLI shows. */
-    fun answerTerminal(number: Int) {
+    fun answerTerminal(number: Int) = answerOnce { terminalBridge.answer(it, number) }
+
+    /**
+     * Answers the terminal CLI's menu with typed [text] through its option [number] ("Type something.",
+     * "No, and tell Claude what to do"). If it can't, the text goes back into Chat's box.
+     */
+    fun answerTerminalText(number: Int, text: String) = answerOnce { tabId ->
+        terminalBridge.answerText(tabId, number, text)?.let { why ->
+            _pendingChatInput.value = text
+            _snackbarEvent.emit(why)
+        }
+    }
+
+    /** ← in the terminal CLI's multi-question form: back to the previous question. */
+    fun backTerminal() { terminalTarget.value?.let { terminalBridge.back(it.tabId) } }
+
+    /** Yes on the plain approval card (the CLI asks, but its menu couldn't be read). */
+    fun approveTerminal() = answerOnce { terminalBridge.approve(it) }
+
+    /** One answer at a time: a second tap while one is going in would land on whatever comes next. */
+    private var answering: kotlinx.coroutines.Job? = null
+    private fun answerOnce(block: suspend (Int) -> Unit) {
         val tabId = terminalTarget.value?.tabId ?: return
-        viewModelScope.launch { terminalBridge.answer(tabId, number) }
+        if (answering?.isActive == true) return
+        answering = viewModelScope.launch { block(tabId) }
     }
 
     /** Esc in the terminal CLI: stop its turn, or cancel its menu. */
@@ -226,6 +248,11 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun sendToTerminal(tabId: Int, text: String) {
+        // A question with a typed answer on screen: Chat's box answers it (the inline one first).
+        terminalLive.value.menu?.options?.filter { it.asksText }?.let { opts ->
+            val opt = opts.firstOrNull { it.inline } ?: opts.firstOrNull()
+            if (opt != null && text.isNotBlank()) { answerTerminalText(opt.number, text); return }
+        }
         terminalBridge.send(tabId, text)?.let { why -> viewModelScope.launch { _snackbarEvent.emit(why) } }
     }
 

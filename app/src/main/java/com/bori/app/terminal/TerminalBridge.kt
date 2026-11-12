@@ -59,8 +59,12 @@ class TerminalBridge @Inject constructor(
         // Enter on a menu would pick whatever is highlighted: answer it with its buttons instead.
         if (CliStatus.menu(lines) != null) return "$name is asking something: pick an answer above it first."
         return when (manager.agentStateMap.value[tabId]) {
-            // A text box opened from a menu ("No, and tell Claude…") is waiting for exactly this.
-            AgentState.WAITING -> { manager.typeLine(tab.session, text); null }
+            // Asking, but its menu couldn't be read: Enter there would pick the highlighted answer.
+            // At its input line (a "tell Claude what to do instead" box, or an approval already
+            // answered) the text is what it waits for.
+            AgentState.WAITING -> if (!CliStatus.atPrompt(lines) && CliStatus.parse(lines) == null) {
+                "$name is asking something in the terminal: answer it with the buttons above first."
+            } else { manager.typeLine(tab.session, text); null }
             AgentState.WORKING -> if (CliStatus.parse(lines) != null) {
                 "$name is still working. Wait for it to finish, or tap Stop."
             } else { manager.typeLine(tab.session, text); null }
@@ -78,6 +82,8 @@ class TerminalBridge @Inject constructor(
         val menu: CliStatus.Menu? = null,
         val waiting: Boolean = false,
         val screenTail: List<String> = emptyList(),
+        /** The CLI's mode when it isn't the default ("Plan mode", "Accept edits"). */
+        val mode: String? = null,
     )
 
     /** Tab [tabId]'s live status and menu, re-read from its screen a few times a second while collected. */
@@ -87,15 +93,18 @@ class TerminalBridge @Inject constructor(
             if (lines == null) emit(Live()) else {
                 val menu = CliStatus.menu(lines)
                 val status = if (menu == null) CliStatus.parse(lines) else null
-                // A stale WAITING while the spinner runs again isn't a question.
-                val waiting = manager.agentStateMap.value[tabId] == AgentState.WAITING && status == null
+                // WAITING outlives its question (it clears on the next hook): not while the spinner runs
+                // again, and not at the input line after an approval was answered or turned down.
+                val waiting = manager.agentStateMap.value[tabId] == AgentState.WAITING &&
+                    status == null && menu == null && !CliStatus.atPrompt(lines)
                 emit(Live(
                     status = status,
                     menu = menu,
                     waiting = waiting,
-                    screenTail = if (waiting && menu == null) {
+                    screenTail = if (waiting) {
                         lines.map(CliStatus::clean).filter { it.isNotEmpty() }.takeLast(TAIL_LINES)
                     } else emptyList(),
+                    mode = CliStatus.mode(lines),
                 ))
             }
             delay(LIVE_POLL_MS)
@@ -103,22 +112,87 @@ class TerminalBridge @Inject constructor(
     }.flowOn(Dispatchers.Main).distinctUntilChanged()
 
     /**
-     * Picks option [number] of the menu on tab [tabId]'s screen: presses the number, and if the same
-     * menu is still there a moment later (a list that doesn't take numbers), moves the cursor to it
-     * with the arrow keys and presses Enter.
+     * Picks option [number] of the menu on tab [tabId]'s screen by pressing its number. If the screen
+     * hasn't changed at all a moment later, the list didn't take the number: the cursor is moved to it
+     * with the arrow keys and Enter pressed. A changed screen means the number did something, and
+     * nothing more is sent: Claude Code asks the same question again for the next command, and a
+     * second key there would answer a prompt the user hasn't seen.
      */
     suspend fun answer(tabId: Int, number: Int) {
-        val before = withContext(Dispatchers.Main) { manager.bottomLines(tabId, SCAN_LINES)?.let(CliStatus::menu) }
+        val before = withContext(Dispatchers.Main) { manager.bottomLines(tabId, SCAN_LINES) } ?: return
+        val menu = CliStatus.menu(before) ?: return
         manager.writeKeys(tabId, number.toString())
-        if (before == null) return
         delay(ANSWER_CHECK_MS)
-        val after = withContext(Dispatchers.Main) { manager.bottomLines(tabId, SCAN_LINES)?.let(CliStatus::menu) } ?: return
-        if (after.question != before.question || after.options.map { it.label } != before.options.map { it.label }) return
-        val from = after.options.indexOfFirst { it.selected }.takeIf { it >= 0 } ?: return
-        val to = after.options.indexOfFirst { it.number == number }.takeIf { it >= 0 } ?: return
+        val after = withContext(Dispatchers.Main) { manager.bottomLines(tabId, SCAN_LINES) } ?: return
+        if (after != before) return
+        val from = menu.options.indexOfFirst { it.selected }.takeIf { it >= 0 } ?: return
+        val to = menu.options.indexOfFirst { it.number == number }.takeIf { it >= 0 } ?: return
         val arrow = if (to > from) "\u001b[B" else "\u001b[A"
         manager.writeKeys(tabId, arrow.repeat(Math.abs(to - from)) + "\r")
     }
+
+    /**
+     * The plain Yes when the CLI asks but its menu couldn't be read: "1" (Claude Code's Yes), and if
+     * the screen didn't move, Enter, which picks the highlighted answer (Yes is first). Only while it's
+     * still asking.
+     */
+    suspend fun approve(tabId: Int) {
+        val before = withContext(Dispatchers.Main) { manager.bottomLines(tabId, SCAN_LINES) } ?: return
+        if (CliStatus.atPrompt(before)) return
+        manager.writeKeys(tabId, "1")
+        delay(ANSWER_CHECK_MS)
+        val after = withContext(Dispatchers.Main) { manager.bottomLines(tabId, SCAN_LINES) } ?: return
+        if (after == before && manager.agentStateMap.value[tabId] == AgentState.WAITING) manager.writeKeys(tabId, "\r")
+    }
+
+    /**
+     * Answers the menu on tab [tabId] with typed [text], through its option [number] that asks for
+     * text. Returns why it couldn't, or null when it went.
+     * - "Type something." (Claude Code's AskUserQuestion) takes the text on its own row: the cursor is
+     *   moved there with the arrow keys (a digit could be read as a pick), the text typed, and Enter
+     *   pressed only once the text shows on screen.
+     * - "No, and tell Claude what to do differently" is picked first; the text then goes to the input
+     *   line it returns to.
+     */
+    suspend fun answerText(tabId: Int, number: Int, text: String): String? {
+        val line = text.replace(Regex("\\s*\\n\\s*"), " ").trim()
+        if (line.isEmpty()) return null
+        val before = withContext(Dispatchers.Main) { manager.bottomLines(tabId, SCAN_LINES) } ?: return "That terminal tab is closed."
+        val menu = CliStatus.menu(before) ?: return "The question is gone from the terminal."
+        val option = menu.options.firstOrNull { it.number == number } ?: return "The question changed in the terminal."
+        if (option.inline) {
+            val from = menu.options.indexOfFirst { it.selected }.takeIf { it >= 0 } ?: return "Couldn't find the cursor in the terminal."
+            val to = menu.options.indexOf(option)
+            if (to != from) {
+                manager.writeKeys(tabId, (if (to > from) "\u001b[B" else "\u001b[A").repeat(Math.abs(to - from)))
+                delay(KEY_SETTLE_MS)
+            }
+            manager.writeKeys(tabId, line)
+            delay(ANSWER_CHECK_MS)
+            val after = withContext(Dispatchers.Main) { manager.bottomLines(tabId, SCAN_LINES) }.orEmpty()
+            val probe = line.take(TEXT_PROBE).replace(" ", "")
+            val shown = after.joinToString("") { CliStatus.clean(it) }.replace(" ", "")
+            if (probe !in shown) return "The text didn't show in the terminal's box. Finish the answer there."
+            manager.writeKeys(tabId, "\r")
+            return null
+        }
+        answer(tabId, number)
+        // Wait for the input line the "tell it what to do instead" answer leads to.
+        val start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - start < PROMPT_WAIT_MS) {
+            delay(READY_POLL_MS)
+            val lines = withContext(Dispatchers.Main) { manager.bottomLines(tabId, SCAN_LINES) } ?: return "That terminal tab is closed."
+            if (CliStatus.menu(lines) == null && CliStatus.atPrompt(lines)) {
+                val tab = manager.tabs.value.firstOrNull { it.id == tabId && !it.finished } ?: return "That terminal tab is closed."
+                manager.typeLine(tab.session, line)
+                return null
+            }
+        }
+        return "The terminal didn't show its input line. Send your text again in a moment."
+    }
+
+    /** ←: back to the previous question of a form that asks several at once. */
+    fun back(tabId: Int) = manager.writeKeys(tabId, "\u001b[D")
 
     /** Esc: interrupts the agent mid-turn, or cancels the menu on screen. */
     fun interrupt(tabId: Int) = manager.writeKeys(tabId, "\u001b")
@@ -349,6 +423,9 @@ class TerminalBridge @Inject constructor(
 
         /** How long a pressed number gets to close its menu before the arrow keys are tried. */
         const val ANSWER_CHECK_MS = 700L
+        const val KEY_SETTLE_MS = 250L
+        const val PROMPT_WAIT_MS = 3_000L
+        const val TEXT_PROBE = 16
 
         /** Screen lines shown with the plain Yes / No card when no menu could be read. */
         const val TAIL_LINES = 8

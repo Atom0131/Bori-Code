@@ -162,4 +162,69 @@ class CliStatusTest {
         assertEquals("Accept this plan?", m.question)
         assertEquals(3, m.options.size)
     }
+
+    @Test fun inputLineIsPromptNotMenu() {
+        assertTrue(CliStatus.atPrompt(screen("""
+            ⏺ Okay, I won't run it.
+
+            ────────────────────────────
+            > 
+            ────────────────────────────
+              ? for shortcuts
+        """)))
+        assertTrue(CliStatus.atPrompt(listOf("│ > fix the build  │")))
+        assertTrue(!CliStatus.atPrompt(screen("""
+            Do you want to proceed?
+            ❯ 1. Yes
+              2. No
+        """)))
+        assertTrue(!CliStatus.atPrompt(listOf("✻ Thinking… (3s · esc to interrupt)")))
+    }
+
+    @Test fun modeLine() {
+        assertEquals("Plan mode", CliStatus.mode(screen("""
+            >
+            ────────────────
+              ⏸ plan mode on (shift+tab to cycle)
+        """)))
+        assertEquals("Accept edits", CliStatus.mode(listOf("  ⏵⏵ accept edits on (shift+tab to cycle)")))
+        assertNull(CliStatus.mode(listOf(">", "  ? for shortcuts")))
+    }
+
+    @Test fun askUserQuestionFormWithTypedAnswer() {
+        val m = CliStatus.menu(screen("""
+            ────────────────────────────────────────
+             ←  ☐ Bugs  ☐ Next  ✔ Submit  →
+
+            Which bugs do you want fixed first? Tell me what
+            you saw: which screen, what you did.
+
+            ❯ 1. I'll describe them
+                 Type the bug(s) in the 'Other' box below
+              2. Check open items
+                 No new bugs.
+              3. Type something.
+            ────────────────────────────────────────
+              4. Chat about this
+
+            Enter to select · Tab/Arrow keys to navigate · Esc to cancel
+        """))!!
+        assertEquals("Which bugs do you want fixed first? Tell me what you saw: which screen, what you did.", m.question)
+        assertNull(m.subject)
+        assertTrue(m.steps)
+        assertEquals(4, m.options.size)
+        assertTrue(m.options[2].inline)
+        assertTrue(m.options[2].asksText)
+        assertTrue(!m.options[3].asksText)
+    }
+
+    @Test fun singleQuestionHasNoSteps() {
+        val m = CliStatus.menu(screen("""
+            Do you want to proceed?
+            ❯ 1. Yes
+              2. No, and tell Claude what to do differently (esc)
+        """))!!
+        assertTrue(!m.steps)
+        assertTrue(m.options[1].asksText && !m.options[1].inline)
+    }
 }

@@ -14,10 +14,19 @@ object CliStatus {
     data class Option(val number: Int, val label: String, val description: String? = null, val selected: Boolean = false) {
         /** "Type something" / "No, and tell Claude…": picking it opens a text box, answered by the next Chat send. */
         val asksText: Boolean get() = TEXT_OPTION.containsMatchIn(label)
+        /** "Type something.": the text is typed into the menu itself, on this option's row (AskUserQuestion). */
+        val inline: Boolean get() = INLINE_OPTION.containsMatchIn(label)
     }
 
     /** A menu waiting for the user: [question], what it's about ([subject], e.g. the command), the [options]. */
-    data class Menu(val question: String, val subject: String?, val options: List<Option>, val canCancel: Boolean)
+    data class Menu(
+        val question: String,
+        val subject: String?,
+        val options: List<Option>,
+        val canCancel: Boolean,
+        /** One of several questions asked together (tabs "☐ Bugs ☐ Next ✔ Submit"): ← goes back a question. */
+        val steps: Boolean = false,
+    )
 
     /** Spinner characters Claude Code cycles through. Not ● / ⏺, which mark messages. */
     const val SPINNER = "·✢✳✶✻✽*✺✹✸✷"
@@ -35,8 +44,41 @@ object CliStatus {
 
     private val OPTION = Regex("^(?:([❯›>▶])\\s*)?(\\d{1,2})[.)]\\s+(.+)$")
     private val TEXT_OPTION = Regex("type something|tell claude|something else|other\\b|\\(esc\\)", RegexOption.IGNORE_CASE)
+    private val INLINE_OPTION = Regex("type something|something else|^other\\b", RegexOption.IGNORE_CASE)
+    /** The tab row of a multi-question form: "← ☐ Bugs  ☐ Next  ✔ Submit →". */
+    private val STEPS = Regex("[☐☒✔✓].*\\bSubmit\\b|\\bSubmit\\b.*→")
     private val FOOTER = Regex("esc to cancel|enter to (select|confirm)|to navigate|tab to amend|ctrl\\+\\w+ to ", RegexOption.IGNORE_CASE)
     private val BORDER_CHARS = "│┃║╭╮╰╯─━═┌┐└┘├┤▐▌"
+
+    /** Claude Code's mode line under its input ("⏸ plan mode on (shift+tab to cycle)"). */
+    private val MODE = Regex("(plan mode|accept edits|auto-accept edits|bypass permissions|auto mode) on", RegexOption.IGNORE_CASE)
+
+    /** The mode the CLI is in ("Plan mode", "Accept edits", "Bypass permissions"), or null in the default mode. */
+    fun mode(lines: List<String>): String? {
+        val m = lines.map(::clean).filter { it.isNotEmpty() }.takeLast(MODE_SCAN).firstNotNullOfOrNull { MODE.find(it) } ?: return null
+        return when (m.groupValues[1].lowercase()) {
+            "plan mode" -> "Plan mode"
+            "accept edits", "auto-accept edits" -> "Accept edits"
+            "bypass permissions" -> "Bypass permissions"
+            else -> "Auto mode"
+        }
+    }
+
+    private const val MODE_SCAN = 6
+
+    /** The CLI's own input line ("> text", "❯ text"), not a menu's cursor ("❯ 1. Yes"). */
+    private val PROMPT = Regex("^[>❯](?:\\s|$)(?!\\s*\\d{1,2}[.)]\\s)")
+
+    /**
+     * Whether the CLI shows its input line near the bottom (it's ready for a message, not asking
+     * anything), so a WAITING state left over from an answered approval isn't taken for a question.
+     */
+    fun atPrompt(lines: List<String>): Boolean =
+        menu(lines) == null && lines.map(::clean).filter { it.isNotEmpty() }.takeLast(PROMPT_SCAN).any { PROMPT.containsMatchIn(it) }
+
+    private const val PROMPT_SCAN = 8
+    private const val STEPS_SCAN = 8
+    private const val QUESTION_LINES = 4
 
     /** Strips a TUI box's side borders and padding from one screen line. */
     fun clean(line: String): String = line.trim().trim { it in BORDER_CHARS || it.isWhitespace() }
@@ -110,15 +152,22 @@ object CliStatus {
         // The question: the nearest text line above option 1.
         while (i >= 0 && rows[i].isEmpty()) i--
         if (i < 0) return null
-        val question = rows[i]
+        // The question, with the lines it wrapped onto (a long one on a narrow screen): the text block
+        // right above option 1.
+        val questionLines = arrayListOf(rows[i])
+        while (i - 1 >= 0 && rows[i - 1].isNotEmpty() && questionLines.size < QUESTION_LINES &&
+            !CLAUDE.containsMatchIn(rows[i - 1]) && !OPTION.containsMatchIn(rows[i - 1]) && !STEPS.containsMatchIn(rows[i - 1])
+        ) questionLines.add(0, rows[--i])
+        val question = questionLines.joinToString(" ")
         // What it's about: the lines above the question, up to a blank line (the command, the file).
         val subject = ArrayList<String>()
         var j = i - 1
         while (j >= 0 && rows[j].isEmpty()) j--
         while (j >= 0 && rows[j].isNotEmpty() && subject.size < 4) {
-            if (CLAUDE.containsMatchIn(rows[j]) || OPTION.containsMatchIn(rows[j])) break
+            if (CLAUDE.containsMatchIn(rows[j]) || OPTION.containsMatchIn(rows[j]) || STEPS.containsMatchIn(rows[j])) break
             subject.add(0, rows[j]); j--
         }
-        return Menu(question, subject.joinToString("\n").ifEmpty { null }, options, canCancel)
+        val steps = rows.subList(maxOf(0, i - STEPS_SCAN), i).any { STEPS.containsMatchIn(it) }
+        return Menu(question, subject.joinToString("\n").ifEmpty { null }, options, canCancel, steps)
     }
 }

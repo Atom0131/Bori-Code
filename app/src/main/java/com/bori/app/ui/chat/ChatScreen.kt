@@ -761,6 +761,8 @@ fun ChatScreen(
                             agent = terminalTarget!!.agent,
                             menu = menu,
                             onPick = { viewModel.answerTerminal(it) },
+                            onAnswerText = { n, t -> viewModel.answerTerminalText(n, t) },
+                            onBack = { viewModel.backTerminal() },
                             onCancel = { viewModel.interruptTerminal() },
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                         )
@@ -768,7 +770,7 @@ fun ChatScreen(
                         CliAskFallbackCard(
                             agent = terminalTarget!!.agent,
                             screen = terminalLive.screenTail,
-                            onYes = { viewModel.answerTerminal(1) },
+                            onYes = { viewModel.approveTerminal() },
                             onNo = { viewModel.interruptTerminal() },
                             onShowTerminal = { viewModel.showTargetInTerminal(); onOpenTerminal() },
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
@@ -2143,15 +2145,27 @@ private fun TerminalTargetBar(
             }
         }
         if (chosen != null) {
-            val waiting = live.menu != null || chosen.state == com.bori.app.service.StatusNotifier.AgentState.WAITING
+            val waiting = live.menu != null || live.waiting
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                // The CLI's mode, as its footer shows it ("⏸ plan mode on"): Shift+Tab in the terminal changes it.
+                live.mode?.let { mode ->
+                    Text(
+                        mode,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(MaterialTheme.colorScheme.tertiaryContainer)
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
                 Text(
                     when {
                         // The same words the terminal shows ("Flabbergasting…"), not a fixed "working".
-                        live.menu != null -> "${chosen.agent} is asking you. Answer below or in the terminal."
+                        waiting -> "${chosen.agent} is asking you. Answer below or in the terminal."
                         live.status != null -> "${chosen.agent}: ${live.status.verb}"
                         chosen.state == com.bori.app.service.StatusNotifier.AgentState.WORKING -> "${chosen.agent} is working…"
-                        chosen.state == com.bori.app.service.StatusNotifier.AgentState.WAITING -> "${chosen.agent} is waiting for you in the terminal"
                         chosen.state == com.bori.app.service.StatusNotifier.AgentState.DONE -> "${chosen.agent} is done. Your turn."
                         else -> "Typed into ${chosen.title}, as if you typed it in the terminal"
                     },
@@ -2446,15 +2460,20 @@ private fun CliMenuCard(
     agent: String,
     menu: com.bori.app.terminal.CliStatus.Menu,
     onPick: (Int) -> Unit,
+    onAnswerText: (Int, String) -> Unit,
+    onBack: () -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val notice = noticeColors(NoticeTone.ASK)
+    // The answer typed in: "Type something." takes it in the menu itself; "No, and tell Claude…" after.
+    val textOption = menu.options.firstOrNull { it.inline } ?: menu.options.firstOrNull { it.asksText }
+    var typed by remember(menu.question) { mutableStateOf("") }
     ChatPanel(modifier = modifier, fill = notice.fill, contentColor = notice.text, tier = PanelTier.CARD) {
         Column(
             modifier = Modifier
                 .padding(14.dp)
-                .heightIn(max = 360.dp)
+                .heightIn(max = 420.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -2490,15 +2509,34 @@ private fun CliMenuCard(
                     )
                 }
             }
-            if (menu.options.any { it.asksText }) {
+            if (textOption != null) {
+                val send = { if (typed.isNotBlank()) { onAnswerText(textOption.number, typed); typed = "" } }
+                androidx.compose.material3.OutlinedTextField(
+                    value = typed,
+                    onValueChange = { typed = it },
+                    placeholder = {
+                        Text(if (textOption.inline) "Type your own answer" else "Tell $agent what to do instead")
+                    },
+                    trailingIcon = {
+                        androidx.compose.material3.IconButton(onClick = send, enabled = typed.isNotBlank()) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send answer")
+                        }
+                    },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Send),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { send() }),
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Text(
-                    "Picking an answer that asks for text opens a box in the terminal: type it below and send.",
+                    "Or type it in the box at the bottom and send.",
                     style = MaterialTheme.typography.bodySmall,
                     color = notice.text.copy(alpha = 0.75f),
                 )
             }
-            TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.End)) {
-                Text(if (menu.canCancel) "Cancel (Esc)" else "Esc")
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                if (menu.steps) TextButton(onClick = onBack) { Text("← Back") }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onCancel) { Text(if (menu.canCancel) "Cancel (Esc)" else "Esc") }
             }
         }
     }

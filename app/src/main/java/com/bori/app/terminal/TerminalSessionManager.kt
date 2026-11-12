@@ -134,6 +134,8 @@ class TerminalSessionManager @Inject constructor(
 
     /** Claude Code's transcript (a guest path, from its hooks) for each tab running it. */
     private val claudeTranscripts = java.util.concurrent.ConcurrentHashMap<Int, String>()
+    /** When each tab opened: its Claude Code transcript is one written since. */
+    private val openedAt = java.util.concurrent.ConcurrentHashMap<Int, Long>()
 
     init {
         linux.setAgentStateListener(::onAgentState)
@@ -300,6 +302,7 @@ class TerminalSessionManager @Inject constructor(
             command = startCommand.takeIf { linuxCmd != null },
             agent = title.takeIf { startCommand != null && linuxCmd != null },
         )
+        openedAt[id] = System.currentTimeMillis()
         _tabs.update { it + tab }
         // A new session goes into an empty pane if there is one, else the focused pane.
         _layout.update { layout ->
@@ -344,9 +347,26 @@ class TerminalSessionManager @Inject constructor(
         val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return null
         val home = (tab.kind as? ShellKind.Linux)?.distroId?.let(linux::guestHome) ?: return null
         if (tab.command == "antigravity") return AgyTranscript.latest(home)
-        val guest = claudeTranscripts[tabId] ?: return null
+        val guest = claudeTranscripts[tabId] ?: return newestClaudeTranscript(tabId, home)
         if (!guest.startsWith("/root/") || ".." in guest) return null
         return File(home, guest.removePrefix("/root/"))
+    }
+
+    /**
+     * Before any hook has named it (a slash command such as /plan fires none): the newest Claude Code
+     * transcript written since tab [tabId] opened that no other tab has claimed. The next hook replaces
+     * the guess with the real path.
+     */
+    private fun newestClaudeTranscript(tabId: Int, home: File): File? {
+        val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return null
+        if (tab.command != "claude" && tab.agent != "Claude Code") return null
+        val since = (openedAt[tabId] ?: return null) - TRANSCRIPT_SLACK_MS
+        val claimed = claudeTranscripts.values.toSet()
+        return File(home, ".claude/projects").listFiles()?.asSequence()
+            ?.filter { it.isDirectory }
+            ?.flatMap { dir -> dir.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }?.asSequence() ?: emptySequence() }
+            ?.filter { it.lastModified() >= since && "/root/" + it.relativeTo(home).path !in claimed }
+            ?.maxByOrNull { it.lastModified() }
     }
 
     /** The guest home of tab [tabId]'s distro on the host, or null for an Android shell. */
@@ -467,6 +487,7 @@ class TerminalSessionManager @Inject constructor(
         agentStates.remove(id)
         agyChecked.remove(id)
         claudeTranscripts.remove(id)
+        openedAt.remove(id)
         lastOutput.remove(tab.session)
         publish()
         if (remaining.isEmpty()) TerminalService.stop(context)
@@ -483,6 +504,7 @@ class TerminalSessionManager @Inject constructor(
         agentStates.clear()
         agyChecked.clear()
         claudeTranscripts.clear()
+        openedAt.clear()
         lastOutput.clear()
         publish()
         TerminalService.stop(context)
@@ -568,6 +590,9 @@ class TerminalSessionManager @Inject constructor(
     }
 
     private companion object {
+        /** A transcript can be created a moment before the tab's open time is recorded. */
+        const val TRANSCRIPT_SLACK_MS = 5_000L
+
         const val TAG = "Terminal"
         const val SCREEN_MAX_LINES = 300
         const val TRANSCRIPT_ROWS = 4000
