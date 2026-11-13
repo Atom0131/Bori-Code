@@ -547,8 +547,9 @@ fun EditorScreen(
                         IconButton(onClick = {
                             coroutineScope.launch {
                                 viewModel.syncActiveProjectIfNeeded()
+                                // Opens idle: Debug or Release is picked in the sheet, then Build.
+                                buildViewModel.reset()
                                 showBuildSheet = true
-                                buildViewModel.startBuild()
                             }
                         }) {
                             Icon(Icons.Default.Build, contentDescription = "Build project")

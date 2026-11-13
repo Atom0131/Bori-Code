@@ -31,6 +31,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.DropdownMenuItem
+import com.bori.theme.util.BoriDropdownMenu
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.AlertDialog
@@ -63,7 +66,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bori.app.ui.build.BuildSheet
 import com.bori.app.ui.build.BuildViewModel
-import com.bori.app.ui.build.apkFileForProject
+import com.bori.app.ui.build.lastBuiltApk
+import com.bori.app.ui.build.shareBuildOutput
 import com.bori.app.ui.build.canInstallPackages
 import com.bori.app.ui.build.formatApkSize
 import com.bori.app.ui.build.launchApkInstaller
@@ -98,6 +102,8 @@ fun ProjectsScreen(
     var showBuildSheet by remember { mutableStateOf(false) }
     var showNewProjectDialog by remember { mutableStateOf(false) }
     val filesProject by viewModel.filesProject.collectAsState()
+    // Each finished build re-checks the cards' "last build" buttons.
+    val buildState by buildViewModel.uiState.collectAsState()
 
     filesProject?.let { project ->
         ProjectFilesScreen(
@@ -191,23 +197,14 @@ fun ProjectsScreen(
         )
     }
 
+    // The Build sheet opens idle: Debug or Release is picked there, then Build.
     projectToBuild?.let { pending ->
-        BoriAlertDialog(
-            onDismissRequest = { projectToBuild = null },
-            title = { Text("Build project?") },
-            text = { Text("Build \"${pending.name}\"?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.openProject(pending)
-                    buildViewModel.startBuild()
-                    showBuildSheet = true
-                    projectToBuild = null
-                }) { Text("Build") }
-            },
-            dismissButton = {
-                TextButton(onClick = { projectToBuild = null }) { Text("Cancel") }
-            },
-        )
+        LaunchedEffect(pending.id) {
+            viewModel.openProject(pending)
+            buildViewModel.reset()
+            showBuildSheet = true
+            projectToBuild = null
+        }
     }
 
     if (showBuildSheet) {
@@ -296,6 +293,7 @@ fun ProjectsScreen(
                             viewModel.openProject(project)
                             onOpenProject(project)
                         },
+                        buildState = buildState,
                         onBuild = { projectToBuild = project },
                         onFiles = { viewModel.showFiles(project) },
                         onDelete = { projectToDelete = project },
@@ -310,6 +308,7 @@ fun ProjectsScreen(
 private fun ProjectCard(
     project: Project,
     isActive: Boolean,
+    buildState: Any?,
     onClick: () -> Unit,
     onBuild: () -> Unit,
     onFiles: () -> Unit,
@@ -320,20 +319,21 @@ private fun ProjectCard(
     }
     val language = if (project.template.name.endsWith("_KOTLIN")) "Kotlin" else "Java"
     val context = LocalContext.current
-    val apkFile = remember(project.name) { apkFileForProject(context, project.name) }
-    var apkExists by remember { mutableStateOf(apkFile.exists()) }
+    // The newest APK this project built (debug or release), checked again after every build.
+    val lastApk = remember(project.name, buildState) { lastBuiltApk(context, project.name) }
     var showApkSizeWarning by remember { mutableStateOf(false) }
+    var apkMenu by remember { mutableStateOf(false) }
 
     if (showApkSizeWarning) {
         BoriAlertDialog(
             onDismissRequest = { showApkSizeWarning = false },
             title = { Text("Large APK") },
-            text = { Text("Are you sure you want to do this? This APK is ${formatApkSize(apkFile.length())} and will take up that much space on your device.") },
+            text = { Text("Are you sure you want to do this? This APK is ${formatApkSize(lastApk?.length() ?: 0)} and will take up that much space on your device.") },
             confirmButton = {
                 TextButton(onClick = {
                     showApkSizeWarning = false
                     if (!canInstallPackages(context)) openInstallPermissionSettings(context)
-                    else launchApkInstaller(context, apkFile)
+                    else lastApk?.let { launchApkInstaller(context, it) }
                 }) { Text("Install") }
             },
             dismissButton = {
@@ -391,17 +391,33 @@ private fun ProjectCard(
                     tint = MaterialTheme.colorScheme.primary,
                 )
             }
-            if (apkExists) {
-                IconButton(onClick = {
-                    if (apkFile.length() >= 50L * 1024 * 1024) showApkSizeWarning = true
-                    else if (!canInstallPackages(context)) openInstallPermissionSettings(context)
-                    else launchApkInstaller(context, apkFile)
-                }) {
-                    Icon(
-                        imageVector = Icons.Default.Download,
-                        contentDescription = "Install last build (${formatApkSize(apkFile.length())})",
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
+            if (lastApk != null) {
+                Box {
+                    IconButton(onClick = { apkMenu = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = "Last build (${formatApkSize(lastApk.length())})",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    BoriDropdownMenu(expanded = apkMenu, onDismissRequest = { apkMenu = false }) {
+                        val kind = if (lastApk.name.contains("release")) "release" else "debug"
+                        DropdownMenuItem(
+                            text = { Text("Install last $kind build (${formatApkSize(lastApk.length())})") },
+                            leadingIcon = { Icon(Icons.Default.Download, null) },
+                            onClick = {
+                                apkMenu = false
+                                if (lastApk.length() >= 50L * 1024 * 1024) showApkSizeWarning = true
+                                else if (!canInstallPackages(context)) openInstallPermissionSettings(context)
+                                else launchApkInstaller(context, lastApk)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Share or save the APK") },
+                            leadingIcon = { Icon(Icons.Default.Share, null) },
+                            onClick = { apkMenu = false; shareBuildOutput(context, lastApk) },
+                        )
+                    }
                 }
             }
             IconButton(onClick = onDelete) {

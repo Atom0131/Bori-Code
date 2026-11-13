@@ -160,7 +160,7 @@ class ApkSigner @Inject constructor(
 
     private fun keyPair(keystoreConfig: KeystoreConfig?, variant: BuildVariant, emit: (String) -> Unit): Pair<PrivateKey, X509Certificate> {
         if (variant == BuildVariant.RELEASE && keystoreConfig == null) {
-            throw RuntimeException("Release build requires a custom keystore — configure one in Settings → Release Signing")
+            throw RuntimeException("Release builds need your own signing key: tap Create signing key on the Build sheet, or set one in Settings → Build & signing")
         }
         return if (keystoreConfig != null) {
             emit("Loading custom keystore: ${keystoreConfig.keystorePath}")

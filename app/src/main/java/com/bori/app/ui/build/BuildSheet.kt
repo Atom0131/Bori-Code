@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -37,6 +38,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -83,6 +86,7 @@ private fun BuildSheetContent(
     val hasCustomKeystore by viewModel.hasCustomKeystore.collectAsState()
     val appBundle by viewModel.appBundle.collectAsState()
     val isBuilding = uiState is BuildRunner.UiState.Building
+    val configuration = LocalConfiguration.current
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -171,23 +175,40 @@ private fun BuildSheetContent(
                 }
             }
 
-            // Keystore warning when release is selected but no keystore configured
+            // Release with no key: make one right here (or point at Settings for a key file).
+            // Kept outside the "no key" block: once the key exists that block goes, and the dialog's
+            // "Back up your key" step has to stay up.
+            var showCreateKey by remember { mutableStateOf(false) }
+            if (showCreateKey) {
+                CreateSigningKeyDialog(onCreate = viewModel::createKey, onDismiss = { showCreateKey = false })
+            }
             if (variant == BuildVariant.RELEASE && !hasCustomKeystore) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Warning,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = 1.dp),
-                    )
-                    Text(
-                        text = "No keystore configured — configure one in Settings → Release Signing",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 1.dp),
+                        )
+                        Text(
+                            text = "A release build needs your own signing key.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { showCreateKey = true }, enabled = !isBuilding) { Text("Create signing key") }
+                        Text(
+                            "Have one? Settings → Build & signing → Use a key file.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
 
@@ -197,11 +218,15 @@ private fun BuildSheetContent(
             }
 
             // Log output
+            // A fixed height that fits the window: the old 100–400 dp log grew line by line, so the sheet
+            // resized all through a build. On the unfolded Fold in landscape (~704 dp tall) it also pushed
+            // the buttons off the screen, and the sheet kept re-settling (the "animation" during builds).
+            val logHeight = (configuration.screenHeightDp * 0.9f - SHEET_CHROME_DP).coerceIn(LOG_MIN_DP, LOG_MAX_DP).dp
             LazyColumn(
                 state = listState,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 100.dp, max = 400.dp),
+                    .height(logHeight),
             ) {
                 items(logs) { logEntry ->
                     val color = when (logEntry.level) {
@@ -264,6 +289,17 @@ private fun BuildSheetContent(
                 TextButton(onClick = onDismiss) {
                     Text("Close")
                 }
+                // The sheet opens without building, so Debug or Release (and APK or bundle) is picked first.
+                if (!isBuilding) {
+                    val label = when {
+                        uiState is BuildRunner.UiState.Idle -> "Build ${variant.name.lowercase()}"
+                        else -> "Build ${variant.name.lowercase()} again"
+                    }
+                    Button(
+                        onClick = { viewModel.startBuild() },
+                        enabled = variant == BuildVariant.DEBUG || hasCustomKeystore,
+                    ) { Text(label) }
+                }
                 if (doneState != null) {
                     val apkPath = doneState.apkPath
                     val packageName = doneState.packageName
@@ -296,3 +332,8 @@ private fun BuildSheetContent(
         }
     }
 }
+
+/** Everything in the Build sheet but the log (title, Debug/Release, APK/bundle, key notice, status, buttons), in dp. */
+private const val SHEET_CHROME_DP = 430f
+private const val LOG_MIN_DP = 120f
+private const val LOG_MAX_DP = 400f

@@ -42,13 +42,20 @@ class BuildViewModel @Inject constructor(
         if (uiState.value !is BuildRunner.UiState.Building) _appBundle.value = on
     }
 
-    private val _hasCustomKeystore = MutableStateFlow(false)
-    val hasCustomKeystore: StateFlow<Boolean> = _hasCustomKeystore.asStateFlow()
+    /** A release key is set up. Live: one made or picked in Settings or the sheet shows at once. */
+    val hasCustomKeystore: StateFlow<Boolean> = keystoreRepository.configured
+
+    /** Creates a release key from the Build sheet (see [KeystoreRepository.create]). */
+    fun createKey(name: String, password: String, owner: com.bori.core.build.steps.KeystoreCreator.Owner, done: (Result<java.io.File>) -> Unit) {
+        viewModelScope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                runCatching { keystoreRepository.create(name, password, owner) }
+            }
+            done(result)
+        }
+    }
 
     init {
-        viewModelScope.launch {
-            _hasCustomKeystore.value = keystoreRepository.get() != null
-        }
         viewModelScope.launch {
             buildRunner.uiState.collect { if (it is BuildRunner.UiState.Done) refreshInstallState(it.packageName) }
         }

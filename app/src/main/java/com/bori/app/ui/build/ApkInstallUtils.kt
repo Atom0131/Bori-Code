@@ -8,8 +8,17 @@ import android.provider.Settings
 import androidx.core.content.FileProvider
 import java.io.File
 
-fun apkFileForProject(context: Context, projectName: String, release: Boolean = false): File =
-    File(context.filesDir, "builds/$projectName/${if (release) "app-release.apk" else "app-debug.apk"}")
+/** Where BuildEngine leaves a project's signed APK: builds/<project>/<debug|release>/app-<variant>.apk. */
+fun apkFileForProject(context: Context, projectName: String, release: Boolean = false): File {
+    val variant = if (release) "release" else "debug"
+    return File(context.filesDir, "builds/$projectName/$variant/app-$variant.apk")
+}
+
+/** The project's newest built APK, debug or release, or null when it has none. */
+fun lastBuiltApk(context: Context, projectName: String): File? =
+    listOf(apkFileForProject(context, projectName), apkFileForProject(context, projectName, release = true))
+        .filter { it.isFile }
+        .maxByOrNull { it.lastModified() }
 
 fun formatApkSize(bytes: Long): String = when {
     bytes >= 1_048_576L -> "%.1f MB".format(bytes / 1_048_576.0)

@@ -82,7 +82,13 @@ class BuildRunner @Inject constructor(
                                 // A bundle can't be installed; the last APK stays the one Install uses.
                                 if (!event.apkPath.endsWith(".aab")) buildStateHolder.onSuccess(event.apkPath, event.applicationId)
                                 diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
-                                recordBuildForAgents(project.rootPath, ok = true, "${variant.name.lowercase()} build, ${File(event.apkPath).name}")
+                                val copy = copyToProject(project.rootPath, File(event.apkPath), variant)
+                                copy?.let { _logs.update { l -> l + BuildEvent.Log("Copied to $it in the project folder") } }
+                                recordBuildForAgents(
+                                    project.rootPath, ok = true,
+                                    "${variant.name.lowercase()} build, ${File(event.apkPath).name}" +
+                                        (copy?.let { "\nOutput: $it (in the project folder; upload it from there, e.g. `gh release create`)" } ?: ""),
+                                )
                             }
                             is BuildEvent.Failure -> {
                                 _uiState.value = UiState.Failed(event.error)
@@ -109,8 +115,33 @@ class BuildRunner @Inject constructor(
         if (_uiState.value !is UiState.Building) _uiState.value = UiState.Failed(error)
     }
 
+    /** Back to Idle (the sheet's choice of variant, then Build); the old build's log goes too. */
     fun reset() {
-        if (_uiState.value !is UiState.Building) _uiState.value = UiState.Idle
+        if (_uiState.value is UiState.Building) return
+        _uiState.value = UiState.Idle
+        _logs.value = emptyList()
+    }
+
+    /**
+     * Copies a built APK or app bundle into the project, where Gradle would put it
+     * (`app/build/outputs/apk/debug/app-debug.apk`, `…/bundle/release/app-release.aab`), so the coding
+     * CLIs in Linux, git and gh can see it: the build itself stays in the app's private storage.
+     * Returns the path relative to the project, or null when it couldn't be copied.
+     */
+    private fun copyToProject(rootPath: String, output: File, variant: BuildVariant): String? {
+        if (rootPath.isBlank() || !output.isFile) return null
+        return runCatching {
+            val root = File(rootPath)
+            val module = if (File(root, "app").isDirectory) "app/" else ""
+            val kind = if (output.extension == "aab") "bundle" else "apk"
+            val rel = "${module}build/outputs/$kind/${variant.name.lowercase()}/${output.name}"
+            val dest = File(root, rel)
+            dest.parentFile?.mkdirs()
+            val tmp = File(dest.parentFile, dest.name + ".tmp")
+            output.copyTo(tmp, overwrite = true)
+            if (!tmp.renameTo(dest)) { dest.delete(); tmp.renameTo(dest) }
+            rel
+        }.onFailure { android.util.Log.w("BuildRunner", "Copying the build output into the project", it) }.getOrNull()
     }
 
     /** Every agent (built-in, Claude Code, Antigravity) reads the last real build from .bori/handoff.md. */

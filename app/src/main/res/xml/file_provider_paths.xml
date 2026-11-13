@@ -2,6 +2,8 @@
 <paths>
     <!-- Shares APKs built into context.filesDir/builds/ -->
     <files-path name="builds" path="builds/" />
+    <!-- Release keys Bori Code made or imported (filesDir/signing/), shared only to back them up -->
+    <files-path name="signing" path="signing/" />
     <!-- Project files opened or shared from the file explorer (getExternalFilesDir/Bori) -->
     <external-files-path name="projects" path="Bori/" />
 </paths>
