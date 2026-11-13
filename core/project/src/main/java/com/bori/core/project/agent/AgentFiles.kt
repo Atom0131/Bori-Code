@@ -71,7 +71,7 @@ object AgentFiles {
     }
 
     /** Puts the latest on-device build result in handoff.md, replacing the previous one. */
-    fun appendBuildResult(root: File, ok: Boolean, summary: String) {
+    fun appendBuildResult(root: File, ok: Boolean, summary: String, tookMs: Long? = null) {
         val existing = readHandoff(root).orEmpty()
         val start = existing.indexOf(BUILD_HEADING)
         val kept = if (start < 0) existing else {
@@ -82,10 +82,22 @@ object AgentFiles {
             append(BUILD_HEADING).append('\n')
             append(if (ok) "Result: OK" else "Result: FAILED").append('\n')
             append("Time: ").append(java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(java.util.Date())).append('\n')
+            // Agents quote it when they ask the user to build: a build on the phone takes minutes.
+            if (tookMs != null && tookMs > 0) append("Took: ").append(formatDuration(tookMs)).append('\n')
             if (summary.isNotBlank()) append(summary.trim()).append('\n')
         }
         val base = kept.trimEnd()
         writeHandoff(root, if (base.isEmpty()) section else "$base\n\n$section")
+    }
+
+    /** "45 s", "3 min 12 s", "1 h 5 min". */
+    fun formatDuration(ms: Long): String {
+        val s = (ms + 500) / 1000
+        return when {
+            s < 60 -> "$s s"
+            s < 3600 -> "${s / 60} min" + if (s % 60 != 0L) " ${s % 60} s" else ""
+            else -> "${s / 3600} h" + if (s % 3600 / 60 != 0L) " ${s % 3600 / 60} min" else ""
+        }
     }
 
     private fun read(file: File): String? =

@@ -342,6 +342,9 @@ fun SettingsScreen(
                 }
             }
 
+            // ── Stats overlay and notification ───────────────────────────────
+            StatsSection()
+
             }
 
             if (shown == SettingsCategory.AGENTS) {

@@ -34,6 +34,8 @@ class AntigravityClient @Inject constructor(
 
     override fun supportsToolUse(): Boolean = true
 
+    override val modelsArgv: List<String> get() = listOf(cli.command, "models")
+
     override suspend fun FlowCollector<ChatChunk>.runTurn(
         turn: Turn,
         message: ChatMessage,

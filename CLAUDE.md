@@ -56,6 +56,18 @@ in the full flavor only); `core:ai → core:security, core:editor`; `core:build 
    source of truth (defaults, free-tier flags, output caps, picker notes). The
    pickers, `ModelRouter`, and ViewModels all read from it — never hardcode model IDs
    elsewhere.
+6. **Guest policy (`core/linux/GuestPolicy.kt`): never deny Claude Code its own `/root/.claude/`.**
+   Its plans, auto-memory, saved tool output, agents and skills live there; the 4.2.0 blanket
+   `Edit(//root/.*)` blocked them all (fixed in 4.5.3, `claudeDenyRules()` + `GuestPolicyRulesTest`).
+   Deny other tools' logins/keys and Claude's own settings/credentials by name instead.
+   `bori-device` reads `/run/bori/device` (host: `files/linux/handoff/device`, `key=value` lines
+   sourced by sh), written every 30 s by `TerminalSessionManager` while a Linux tab is open; keep
+   that format in sync with `DeviceHeat.Reading.toShell`.
+7. **Stats overlay/notification (`app/.../stats/`) read per-device sysfs best effort** (thermal zones,
+   kgsl GPU, cpufreq, our own uid's `/proc/<pid>/stat`; `/proc/stat` is denied to apps). A stat that
+   can't be read is null and hidden ("not available on this phone"), never shown as 0. Sampling runs
+   only while something shows it (`StatsSampler.need`). Over-other-apps (`StatsOverlayService`,
+   SYSTEM_ALERT_WINDOW) is full-flavor only via `flavor/FloatingStats`.
 
 ## Build & run
 ```

@@ -38,6 +38,7 @@ class GuestPolicy @Inject constructor(
         runCatching { writeStatusScript(rootfs) }.onFailure { Log.w(TAG, "Status script", it) }
         runCatching { writeBenchScript(rootfs) }.onFailure { Log.w(TAG, "Bench script", it) }
         runCatching { writeNetScript(rootfs) }.onFailure { Log.w(TAG, "Network script", it) }
+        runCatching { writeDeviceScript(rootfs) }.onFailure { Log.w(TAG, "Device script", it) }
         runCatching { writeProjectRules(rootfs) }.onFailure { Log.w(TAG, "Project rules", it) }
         runCatching { writeShellPrompt(rootfs) }.onFailure { Log.w(TAG, "Shell prompt", it) }
         runCatching { trustWorkspaceRepos(rootfs) }.onFailure { Log.w(TAG, "Git safe.directory", it) }
@@ -208,6 +209,23 @@ class GuestPolicy @Inject constructor(
             |  in the background with its output going to a log file (`nohup cmd > run.log 2>&1 &`) and check
             |  the log, rather than re-running it.
             |
+            |## Long jobs on a phone: say how long first
+            |A long run keeps the phone's CPU busy: it gets hot (in a pocket, too hot to be safe) and drains
+            |the battery. The user decides whether it's worth it, so they need the cost up front.
+            |- Before anything that may run more than about 2 minutes (benchmarks, calibration or test
+            |  suites, dataset or dictionary builds, training, parameter sweeps, big installs), estimate the
+            |  time first: count the items and time a small sample, then extrapolate. Tell the user the
+            |  estimate (e.g. "about 35 minutes"), that the phone will heat up and use battery, and a cheaper
+            |  option (a smaller sample, one language, skipping the baseline run).
+            |- Ask before starting anything you expect to take over about 10 minutes. Repeat the ETA when
+            |  you report progress.
+            |- `bori-device` shows the phone's battery temperature, Android's thermal state and charge. Check
+            |  it before a long run and while it runs. At thermal "severe" or worse, or a battery at 45 °C or
+            |  more, pause the job (`kill -STOP <pid>`, later `kill -CONT <pid>`) or stop it, and tell the user
+            |  (let it cool, out of a pocket or case). A "Phone status" line in your context means it's warm.
+            |- An on-device build's time is in `.bori/handoff.md` (`Took:` under `## Last Bori build`); quote
+            |  it when you ask the user to build.
+            |
             |## GitHub
             |- `git push`, `git pull` and `gh` (GitHub CLI) work once the user has signed in; check with
             |  `gh auth status`. If they haven't, ask them to tap "Sign in to GitHub" in Bori Code's
@@ -251,20 +269,11 @@ class GuestPolicy @Inject constructor(
     /**
      * Claude Code's managed settings: highest precedence, can't be overridden by user or project
      * settings. Claude already confines edits to its working directory unless approved; the deny
-     * rules make everything outside the workspace un-approvable for its file tools.
+     * rules ([claudeDenyRules]) make system folders and other tools' files un-approvable for its file
+     * tools, while its own `/root/.claude/` (plans, memory) stays usable.
      */
     private fun writeClaudePolicy(rootfs: File) {
-        val outside = listOf("bin", "etc", "home", "lib", "media", "mnt", "opt", "run", "sbin", "srv", "usr", "var")
-        val deny = JSONArray().apply {
-            outside.forEach { put("Edit(//$it/**)") }
-            put("Edit(//root/.*)")
-            put("Edit(//root/.*/**)")
-            // Each CLI's login stays its own.
-            put("Read(//root/.gemini/**)")
-            put("Edit(//root/.gemini/**)")
-            // The GitHub token; git and gh reach it through the shell, never the file tools.
-            put("Read(//root/.config/gh/**)")
-        }
+        val deny = JSONArray().apply { claudeDenyRules().forEach { put(it) } }
         // Each runs the status script, which tells Bori Code what Claude is doing in this tab
         // (its status notification). PostToolUse: an approved tool has run, so it's working again.
         fun hook(state: String) = JSONArray().put(JSONObject().put("hooks", JSONArray().put(
@@ -283,7 +292,10 @@ class GuestPolicy @Inject constructor(
                 put("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
             })
             put("hooks", JSONObject().apply {
-                put("UserPromptSubmit", hook("working"))
+                // bori-device prints a line (added to Claude's context) only when the phone is warm.
+                put("UserPromptSubmit", hook("working").put(JSONObject().put("hooks", JSONArray().put(
+                    JSONObject().put("type", "command").put("command", "$DEVICE_SCRIPT --hook").put("timeout", 5),
+                ))))
                 put("PostToolUse", hook("working"))
                 // A tool that failed or was refused: the turn goes on, so it's no longer asking.
                 put("PostToolUseFailure", hook("working"))
@@ -471,6 +483,46 @@ class GuestPolicy @Inject constructor(
     }
 
     /**
+     * `bori-device`: the phone's battery temperature, Android's thermal state and charge, from the file
+     * Bori Code refreshes every 30 s while a Linux session runs (`DeviceStatusWriter`). `--hook` (Claude
+     * Code's UserPromptSubmit hook) prints one line only when the phone is warm or low on battery, so
+     * a cool phone adds nothing to the conversation.
+     */
+    private fun writeDeviceScript(rootfs: File) {
+        val script = File(rootfs, DEVICE_SCRIPT.removePrefix("/"))
+        script.parentFile?.mkdirs()
+        val file = "${ProotLauncher.GUEST_HANDOFF}/${ProotLauncher.DEVICE_FILE}"
+        script.writeText(
+            """
+            |#!/bin/sh
+            |# Written by Bori Code: the phone's heat and battery, for deciding whether to run a long job.
+            |f=$file
+            |if [ "${'$'}1" = --hook ]; then cat >/dev/null; fi
+            |if [ ! -f "${'$'}f" ]; then
+            |  [ "${'$'}1" = --hook ] && exit 0
+            |  echo "No phone status yet (Bori Code writes it while a terminal is open)."; exit 1
+            |fi
+            |. "${'$'}f"
+            |if [ "${'$'}1" = --hook ]; then
+            |  warm=
+            |  case "${'$'}thermal" in moderate|severe|critical|emergency|shutdown) warm=1;; esac
+            |  [ "${'$'}{battery_temp_c%.*}" -ge 40 ] 2>/dev/null && warm=1
+            |  [ "${'$'}charging" = no ] && [ "${'$'}battery_percent" -le 15 ] 2>/dev/null && warm=1
+            |  [ -n "${'$'}warm" ] || exit 0
+            |  echo "Phone status: battery ${'$'}{battery_temp_c} °C, thermal ${'$'}thermal, ${'$'}{battery_percent}% (charging: ${'$'}charging). Keep work light; ask before long jobs; pause long runs at thermal severe or 45 °C."
+            |  exit 0
+            |fi
+            |echo "Battery temperature: ${'$'}{battery_temp_c} °C"
+            |echo "Thermal state:       ${'$'}thermal (Android: none, light, moderate, severe, critical, emergency, shutdown)"
+            |[ -n "${'$'}headroom" ] && echo "Thermal headroom:    ${'$'}headroom (1.0 = throttling starts)"
+            |echo "Battery:             ${'$'}{battery_percent}%, charging: ${'$'}charging"
+            |echo "Updated:             ${'$'}(( ${'$'}(date +%s) - updated )) s ago"
+            |""".trimMargin(),
+        )
+        script.setExecutable(true, false)
+    }
+
+    /**
      * `bori-bench`: half a minute of timings that show where the time goes under proot (process starts,
      * file access, git, search, plain computation), one line each, to compare with a PC or between builds.
      */
@@ -517,6 +569,34 @@ class GuestPolicy @Inject constructor(
     internal companion object {
         const val TAG = "GuestPolicy"
 
+        /**
+         * Claude Code's managed deny rules. System folders and the other tools' logins and keys are out
+         * of reach of its file tools. Its own `/root/.claude/` stays open: plans, auto-memory, saved tool
+         * output, agents, skills and commands live there (a blanket `/root/.*` deny from 4.2.0 blocked
+         * all of them; Fold, 2026-11-13). Only the files that would loosen its own rules or expose its
+         * login are denied in there.
+         */
+        fun claudeDenyRules(): List<String> = buildList {
+            listOf("bin", "etc", "home", "lib", "media", "mnt", "opt", "run", "sbin", "srv", "usr", "var")
+                .forEach { add("Edit(//$it/**)") }
+            // Other tools' logins, keys and config. Each CLI's login stays its own.
+            add("Read(//root/.gemini/**)")
+            listOf(".gemini", ".codex", ".config", ".ssh", ".gnupg", ".local", ".npm")
+                .forEach { add("Edit(//root/$it/**)") }
+            // The GitHub token and SSH keys; git and gh reach them through the shell, never the file tools.
+            add("Read(//root/.config/gh/**)")
+            add("Read(//root/.ssh/**)")
+            // Shell startup files run on every login.
+            listOf(".bashrc", ".profile", ".bash_profile", ".zshrc", ".gitconfig")
+                .forEach { add("Edit(//root/$it)") }
+            // Claude's own settings (its permissions) and login.
+            add("Edit(//root/.claude/settings.json)")
+            add("Edit(//root/.claude/settings.local.json)")
+            add("Read(//root/.claude/.credentials.json)")
+            add("Edit(//root/.claude/.credentials.json)")
+            add("Edit(//root/.claude.json)")
+        }
+
         /** First line of the rules Bori Code writes into other CLIs' own instruction files. */
         const val RULES_MARKER = "<!-- Written by Bori Code; delete this line to keep your own edits. -->"
 
@@ -525,6 +605,8 @@ class GuestPolicy @Inject constructor(
         const val BENCH_SCRIPT = "/usr/local/bin/bori-bench"
 
         const val NET_SCRIPT = "/usr/local/bin/bori-net"
+
+        const val DEVICE_SCRIPT = "/usr/local/bin/bori-device"
 
         const val GITHUB_SCRIPT = "/usr/local/bin/bori-github"
 

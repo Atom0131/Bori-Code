@@ -139,6 +139,13 @@ class TerminalSessionManager @Inject constructor(
 
     init {
         linux.setAgentStateListener(::onAgentState)
+        // Claude Code's token use for the stats overlay and notification, from its transcripts.
+        com.bori.app.stats.TokenStats.claudeSources = {
+            claudeTranscripts.keys.mapNotNull { id ->
+                val tab = _tabs.value.firstOrNull { it.id == id } ?: return@mapNotNull null
+                transcriptFile(id)?.let { (tab.agent ?: tab.title) to it }
+            }
+        }
     }
 
     /** A Claude Code hook (GuestPolicy's status script) reported [state] for tab [tabId]. */
@@ -148,6 +155,11 @@ class TerminalSessionManager @Inject constructor(
         if (tab.agent == null) updateTab(tab.session) { it.copy(agent = "Claude Code") }
         // The hook's JSON is cut at 4000 bytes, so read the path without parsing the whole thing.
         TRANSCRIPT_PATH.find(json)?.groupValues?.get(1)?.let { claudeTranscripts[tabId] = it }
+        // Off the main thread: the first read of a transcript can be a couple of MB.
+        transcriptFile(tabId)?.let { file ->
+            val name = tab.agent ?: "Claude Code"
+            Thread({ com.bori.app.stats.TokenStats.onClaudeTranscript(name, file) }, "TokenStats").start()
+        }
         var detail: String? = null
         val next = when (state) {
             "working" -> AgentState.WORKING
@@ -264,6 +276,52 @@ class TerminalSessionManager @Inject constructor(
     /** publish() runs updateWake() and refreshes the notification line. */
     private val wakeCheck = Runnable { publish() }
 
+    private var heatTicking = false
+    private var lastHeatAlert = 0L
+
+    /** Starts [heatTick] if it isn't running; it stops by itself once no Linux tab is left. */
+    private fun ensureHeatTicking() {
+        if (heatTicking || linux.deviceStatusFile() == null) return
+        heatTicking = true
+        main.post(heatTick)
+    }
+
+    /**
+     * Every [HEAT_MS] while a Linux tab is open: writes the phone's heat and battery for the guest's
+     * `bori-device` (the agents check it before and during long jobs), and warns once per
+     * [HEAT_ALERT_MS] when the phone is hot while an agent is working.
+     */
+    private val heatTick: Runnable = object : Runnable {
+        override fun run() {
+            val linuxOpen = _tabs.value.any { it.kind is ShellKind.Linux && !it.finished }
+            val file = linux.deviceStatusFile()
+            if (!linuxOpen || file == null) { heatTicking = false; return }
+            val now = System.currentTimeMillis()
+            Thread({
+                val reading = runCatching { DeviceHeat.read(context) }.getOrNull() ?: return@Thread
+                runCatching {
+                    file.parentFile?.mkdirs()
+                    val tmp = File(file.parentFile, file.name + ".tmp")
+                    tmp.writeText(reading.toShell(now / 1000))
+                    tmp.renameTo(file)
+                }.onFailure { Log.w(TAG, "Device status", it) }
+                if (reading.hot) main.post { heatAlert(reading, now) }
+            }, "device-heat").start()
+            main.postDelayed(this, HEAT_MS)
+        }
+    }
+
+    private fun heatAlert(reading: DeviceHeat.Reading, now: Long) {
+        if (now - lastHeatAlert < HEAT_ALERT_MS) return
+        val working = _tabs.value.firstOrNull { !it.finished && agentStates[it.id] == AgentState.WORKING } ?: return
+        lastHeatAlert = now
+        StatusNotifier.alert(
+            context,
+            "Your phone is hot (${reading.batteryTempC.toInt()} °C)",
+            "${working.agent ?: working.title} is still working. Open Bori Code to pause it, and let the phone cool out of a pocket or case.",
+        )
+    }
+
     private fun ensureTicking() {
         main.removeCallbacks(tick)
         main.postDelayed(tick, TICK_MS)
@@ -326,6 +384,7 @@ class TerminalSessionManager @Inject constructor(
         )
         openedAt[id] = System.currentTimeMillis()
         _tabs.update { it + tab }
+        if (linuxCmd != null) ensureHeatTicking()
         // A new session goes into an empty pane if there is one, else the focused pane.
         _layout.update { layout ->
             val slot = layout.slots.indexOfFirst { it == null }.takeIf { it >= 0 } ?: layout.focused
@@ -622,6 +681,10 @@ class TerminalSessionManager @Inject constructor(
         const val SETTLE_MS = 300L
         const val WAKE_QUIET_MS = 15 * 60_000L
         const val WAKE_CHECK_MS = 60_000L
+        /** How often the phone's heat goes to the guest's `bori-device` file. */
+        const val HEAT_MS = 30_000L
+        /** At most one hot-phone alert this often. */
+        const val HEAT_ALERT_MS = 15 * 60_000L
         const val ENTER_DELAY_MS = 40L
         const val START_GRACE_MS = 400L
         const val HIDDEN_COLUMNS = 120

@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.bori.core.ai.model.ModelCatalog
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
@@ -155,11 +157,65 @@ abstract class CliAgentClient(
     protected fun Turn.shortPath(path: String): String =
         path.removePrefix("$guestCwd/").takeIf { it != path } ?: path.removePrefix("${ProotLauncher.GUEST_WORKSPACE}/")
 
+    /** The CLI's own "list models" command, if it has one (Antigravity: `antigravity models`). */
+    protected open val modelsArgv: List<String>? = null
+
+    /**
+     * The models the installed CLI offers, so a new model (Gemini 4 Hydrogen, Carbon, …) shows in
+     * Chat once the CLI is updated, without a Bori Code update. Without a list command, the
+     * catalog's names (Claude Code's aliases already follow its updates: "opus" is the newest Opus).
+     */
+    override suspend fun listModels(): List<String> = withContext(Dispatchers.IO) {
+        val argv = modelsArgv
+            ?: return@withContext ModelCatalog.chatModelIds(provider).filter { it != DEFAULT_MODEL }
+        val distroId = distro() ?: return@withContext emptyList()
+        val process = proot.start(
+            proot.command(distroId, argv, guestCwd = ProotLauncher.GUEST_WORKSPACE, binds = proot.workspaceBinds()),
+            mergeStderr = false,
+        )
+        val output = StringBuilder()
+        val reader = Thread { runCatching { process.inputStream.bufferedReader().forEachLine { output.appendLine(it) } } }
+            .apply { isDaemon = true; start() }
+        Thread { runCatching { process.errorStream.readBytes() } }.apply { isDaemon = true; start() }
+        if (!process.waitFor(LIST_MODELS_SECONDS, TimeUnit.SECONDS)) {
+            process.destroy()
+            error("${cli.title} didn't list its models in time")
+        }
+        reader.join(1_000)
+        parseModelList(output.toString()).ifEmpty { error("${cli.title} listed no models") }
+    }
+
     protected fun clip(text: String, max: Int = 2_000): String =
         if (text.length <= max) text else text.take(max) + "\n… (${text.length - max} more characters)"
 
     companion object {
         /** Model entry that leaves the choice to the CLI (its own /model setting). */
         const val DEFAULT_MODEL = "default"
+
+        private const val LIST_MODELS_SECONDS = 60L
+
+        private val SLUG = Regex("""\b[a-z][a-z0-9]*(?:[-.][a-z0-9]+)*-[a-z0-9.]+\b""")
+        private val DISPLAY_NAME = Regex("""^[A-Z][A-Za-z0-9 .]*?(?: \([A-Za-z0-9 .]+\))?$""")
+        private val HEADING_WORDS = listOf("model", "available", "account", "usage", "run ", "select")
+        private val BULLET = Regex("""^\s*(?:[-*•›>]|\d+[.)])?\s*""")
+
+        /**
+         * Model names from a CLI's model list. A line gives its id (`gemini-4-hydrogen-xhigh`) when it
+         * has one, else the name the CLI takes in quotes (`Orchestrator (Carbon)`). Headings, empty
+         * lines and log noise are skipped; a "(current)" or "default" marker is dropped.
+         */
+        fun parseModelList(output: String): List<String> = output.lineSequence()
+            .map { it.replace(Regex("\u001B\\[[0-9;]*m"), "").trimEnd() }
+            .map { BULLET.replaceFirst(it, "") }
+            .map { it.replace(Regex("""\s*[(\[](?:current|default|selected)[)\]]\s*$""", RegexOption.IGNORE_CASE), "").trim() }
+            .filter { it.isNotEmpty() && !it.endsWith(":") && !it.startsWith("proot") }
+            .mapNotNull { line ->
+                SLUG.find(line)?.value
+                    ?: line.split(Regex("\\s{2,}|\t| - ")).first().trim()
+                        .takeIf { DISPLAY_NAME.matches(it) && ' ' in it && HEADING_WORDS.none { w -> w in it.lowercase() } }
+            }
+            .filterNot { it.startsWith("http") }
+            .distinct()
+            .toList()
     }
 }

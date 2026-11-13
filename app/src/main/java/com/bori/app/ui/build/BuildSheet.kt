@@ -1,5 +1,6 @@
 package com.bori.app.ui.build
 
+import com.bori.theme.components.crystalSegmentedButtonColors
 import com.bori.theme.util.BoriSheet
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -154,9 +155,18 @@ private fun BuildSheetContent(
                         selected = variant == v,
                         onClick = { viewModel.setVariant(v) },
                         shape = SegmentedButtonDefaults.itemShape(index, BuildVariant.entries.size),
-                        enabled = !isBuilding,
+                        colors = crystalSegmentedButtonColors(),
+                        // Not disabled while building (the engine's disabled look is flat Material):
+                        // the view model ignores a change mid-build instead.
                         label = { Text(v.name.lowercase().replaceFirstChar { it.uppercase() }) },
                     )
+                }
+            }
+
+            // How long this build took last time: a long one keeps the phone busy (and warm) for minutes.
+            if (!isBuilding) {
+                viewModel.lastBuildNote(variant)?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -168,7 +178,7 @@ private fun BuildSheetContent(
                             selected = appBundle == bundle,
                             onClick = { viewModel.setAppBundle(bundle) },
                             shape = SegmentedButtonDefaults.itemShape(index, 2),
-                            enabled = !isBuilding,
+                            colors = crystalSegmentedButtonColors(),
                             label = { Text(label) },
                         )
                     }
@@ -334,6 +344,6 @@ private fun BuildSheetContent(
 }
 
 /** Everything in the Build sheet but the log (title, Debug/Release, APK/bundle, key notice, status, buttons), in dp. */
-private const val SHEET_CHROME_DP = 430f
+private const val SHEET_CHROME_DP = 450f
 private const val LOG_MIN_DP = 120f
 private const val LOG_MAX_DP = 400f

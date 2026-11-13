@@ -1,5 +1,6 @@
 package com.bori.app.ui.terminal
 
+import com.bori.theme.components.crystalSegmentedButtonColors
 import com.bori.theme.util.BoriSheet
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -352,6 +353,7 @@ private fun KeysSettingsSheet(
                     SegmentedButton(
                         selected = s.split == v,
                         onClick = { update(s.copy(split = v)); onDone(s.copy(split = v)) },
+                        colors = crystalSegmentedButtonColors(),
                         shape = SegmentedButtonDefaults.itemShape(i, 3),
                         label = { Text(label) },
                     )
@@ -381,6 +383,7 @@ private fun KeysSettingsSheet(
                     SegmentedButton(
                         selected = s.autocorrect == v,
                         onClick = { update(s.copy(autocorrect = v)); onDone(s.copy(autocorrect = v)) },
+                        colors = crystalSegmentedButtonColors(),
                         shape = SegmentedButtonDefaults.itemShape(i, 4),
                         label = { Text(label, maxLines = 1) },
                     )
@@ -403,6 +406,7 @@ private fun KeysSettingsSheet(
                     SegmentedButton(
                         selected = s.language == v,
                         onClick = { update(s.copy(language = v)); onDone(s.copy(language = v)) },
+                        colors = crystalSegmentedButtonColors(),
                         shape = SegmentedButtonDefaults.itemShape(i, 2),
                         icon = { Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(16.dp)) },
                         label = { Text(label) },

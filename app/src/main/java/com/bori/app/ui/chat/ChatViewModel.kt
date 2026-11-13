@@ -108,6 +108,9 @@ sealed class Attachment {
     data class ProjectContextAttachment(val projectName: String, val treeText: String) : Attachment()
 }
 
+/** Set once the coding CLIs' model lists were refreshed in this process. */
+private var cliModelsRefreshed = false
+
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val sessionDao: ChatSessionDao,
@@ -294,6 +297,24 @@ class ChatViewModel @Inject constructor(
 
     init {
         viewModelScope.launch(Dispatchers.IO) { projectRepository.syncFromFilesystem() }
+        refreshCliModels()
+    }
+
+    /**
+     * Once per app start: asks each installed coding CLI that can list its models (Antigravity) for
+     * them, so models added by a CLI update (Gemini 4 Hydrogen, Carbon) show in the picker without a
+     * Bori Code update. Kept on failure: the catalog's list still shows.
+     */
+    private fun refreshCliModels() {
+        if (cliModelsRefreshed) return
+        cliModelsRefreshed = true
+        viewModelScope.launch(Dispatchers.IO) {
+            AiProvider.entries.filter { it.isCli && router.isCliAvailable(it) }.forEach { provider ->
+                runCatching { router.listModels(provider) }
+                    .onSuccess { if (it.isNotEmpty()) prefsRepository.updateCachedModels(provider, it) }
+                    .onFailure { android.util.Log.w("ChatViewModel", "Model list for $provider", it) }
+            }
+        }
     }
 
     fun openProject(project: Project) {
@@ -1126,6 +1147,7 @@ class ChatViewModel @Inject constructor(
         )
         try {
             router.chat(request).collect { chunk ->
+                com.bori.app.stats.TokenStats.onChatChunk(chunk)
                 when (chunk) {
                     is ChatChunk.TextDelta -> appendText(chunk.text)
                     is ChatChunk.AgentActivity -> {
@@ -1329,6 +1351,7 @@ class ChatViewModel @Inject constructor(
 
         try {
             router.chat(request).collect { chunk ->
+                com.bori.app.stats.TokenStats.onChatChunk(chunk)
                 when (chunk) {
                     is ChatChunk.ReasoningDelta -> {
                         reasoningAccumulated.append(chunk.text)

@@ -1,5 +1,6 @@
 ﻿package com.bori.app.ui.projects
 
+import com.bori.theme.components.crystalSegmentedButtonColors
 import com.bori.theme.util.BoriSheet
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
@@ -70,6 +71,7 @@ fun ImportProjectSheet(
                     SegmentedButton(
                         selected = selectedTab == i,
                         onClick = { selectedTab = i },
+                        colors = crystalSegmentedButtonColors(),
                         shape = SegmentedButtonDefaults.itemShape(index = i, count = 2),
                         label = { Text(label) },
                     )

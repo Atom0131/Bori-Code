@@ -439,6 +439,7 @@ fun BoriNavHost(
     }
 
     CompositionLocalProvider(LocalWindowLayout provides windowLayout, LocalAppChrome provides appChrome) {
+      Box(Modifier.fillMaxSize()) {
         Scaffold(
             contentWindowInsets = WindowInsets(0),
             // Transparent under Crystal so the theme's colour field shows behind every screen.
@@ -530,6 +531,9 @@ fun BoriNavHost(
                 }
             }
         }
+        // Settings → Appearance → Stats: the panel floats over every screen; long-press opens Settings.
+        com.bori.app.ui.common.InAppStatsOverlay(onOpenSettings = { navController.navigate("settings") })
+      }
     }
 }
 

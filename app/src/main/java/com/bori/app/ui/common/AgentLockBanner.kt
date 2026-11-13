@@ -1,5 +1,6 @@
 package com.bori.app.ui.common
 
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,21 +39,24 @@ fun PollAgentLock(projectKey: Any?, refresh: () -> Unit) {
 
 /** "Claude Code is working on this project": shown while another agent holds .bori/agent.lock. */
 @Composable
-fun AgentLockBanner(lock: AgentLock?) {
+fun AgentLockBanner(lock: AgentLock?, compact: Boolean = false) {
     if (lock == null) return
     val s = MaterialTheme.colorScheme
     Box(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = if (compact) 2.dp else 4.dp)
             .crystalTileSurface(fill = s.secondaryContainer),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = if (compact) 4.dp else 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(Icons.Default.Lock, contentDescription = null, tint = s.secondary)
+            Icon(Icons.Default.Lock, contentDescription = null, tint = s.secondary, modifier = if (compact) Modifier.size(16.dp) else Modifier)
             Text(
-                text = lockSummary(lock) + " Edits here may clash with its work.",
+                // Compact (little room above the keyboard): one line; the dialog has the full text.
+                text = if (compact) "${lock.agent} is working on this project" else lockSummary(lock) + " Edits here may clash with its work.",
+                maxLines = if (compact) 1 else Int.MAX_VALUE,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 // Inter, not bodySmall's font: the editor's code theme makes body text monospace.
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = Inter),
                 color = s.onSecondaryContainer,

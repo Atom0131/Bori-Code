@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -244,12 +245,19 @@ fun TerminalScreen(
         }
     }
 
+    // Keyboard up with little room left (landscape on the unfolded Fold, a tall keyboard): the title
+    // bar and session chips step aside, as in full screen, so the terminal itself stays visible.
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val imeDp = with(density) { WindowInsets.ime.getBottom(density).toDp() }
+    val roomDp = LocalConfiguration.current.screenHeightDp.dp - imeDp
+    val keyboardCrowded = imeDp > 0.dp && roomDp < KEYBOARD_ROOM_MIN
+
     Scaffold(
         containerColor = colors.terminalBackground,
         // The shell's bottom bar (or its padding when unfolded) already clears the gesture bar.
         contentWindowInsets = WindowInsets(0),
         topBar = {
-            if (!fullScreen) {
+            if (!fullScreen && !keyboardCrowded) {
                 BoriTopBar(
                     title = "Terminal",
                     onBack = onBack,
@@ -351,7 +359,7 @@ fun TerminalScreen(
                 .padding(innerPadding)
                 .imePadding(),
         ) {
-            if (!fullScreen && (tabs.size > 1 || layout.split != Split.SINGLE)) {
+            if (!fullScreen && !keyboardCrowded && (tabs.size > 1 || layout.split != Split.SINGLE)) {
                 SessionChips(
                     tabs = tabs,
                     layout = layout,
@@ -863,3 +871,6 @@ private class ScreenViewClient(
 }
 
 private const val LOG_TAG = "BoriTerm"
+
+/** Below this much height above the keyboard, the Terminal's title bar and session chips hide. */
+private val KEYBOARD_ROOM_MIN = 520.dp

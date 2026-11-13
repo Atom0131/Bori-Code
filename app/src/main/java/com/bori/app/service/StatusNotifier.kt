@@ -9,6 +9,7 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import com.bori.app.MainActivity
 import com.bori.app.R
+import com.bori.app.stats.StatsSampler
 
 /**
  * Bori's one ongoing notification: what's running and what state it's in (building, an agent working,
@@ -39,13 +40,18 @@ object StatusNotifier {
     /** The services showing the notification right now. */
     private val holders = mutableSetOf<String>()
 
-    fun hold(who: String) {
+    fun hold(context: Context, who: String) {
         synchronized(holders) { holders += who }
+        StatsSampler.syncNotification(context)
     }
 
-    fun release(who: String) {
+    fun release(context: Context, who: String) {
         synchronized(holders) { holders -= who }
+        StatsSampler.syncNotification(context)
     }
+
+    /** Whether a service is showing the notification now. */
+    fun isShowing(): Boolean = synchronized(holders) { holders.isNotEmpty() }
 
     fun ensureChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -87,17 +93,21 @@ object StatusNotifier {
             if (shells > 0) add(if (shells == 1) "1 terminal tab" else "$shells terminal tabs")
             if (TerminalService.awake) add("Keeping the phone awake while it works")
         }
-        return NotificationCompat.Builder(context, CHANNEL_ID)
+        // The chosen stats, when the user turned them on: first, so they show collapsed too.
+        val stats = StatsSampler.notificationLine(context)
+        val shown = listOfNotNull(stats) + lines
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setContentTitle("Bori - Code · $mode")
-            .setContentText(lines.firstOrNull() ?: "Running")
-            .setStyle(NotificationCompat.BigTextStyle().bigText(lines.joinToString("\n")))
+            .setContentText(shown.firstOrNull() ?: "Running")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(shown.joinToString("\n")))
             .setSmallIcon(R.drawable.ic_stat_bori_code)
             .setColor(BORI_CELESTE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(openApp(context))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .build()
+        com.bori.app.flavor.FloatingStats.hideIntent(context)?.let { builder.addAction(0, "Hide stats", it) }
+        return builder.build()
     }
 
     /** Re-posts the notification with the current state, if a service is showing it. */

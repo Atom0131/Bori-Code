@@ -300,9 +300,11 @@ class ToolExecutor @Inject constructor(
         var apkPath: String? = null
         var errorMsg: String? = null
 
+        var startedAt = 0L
         ChatForegroundService.acquire(context, ChatForegroundService.Reason.BUILD, project.name)
         try {
             buildLock.withLock(onWait = { buildStateHolder.onLog(com.bori.app.data.build.BuildLock.WAITING) }) {
+                startedAt = System.currentTimeMillis()
                 buildEngine.build(
                     project = project,
                     kotlinTimeoutSeconds = timeoutMinutes * 60L,
@@ -326,13 +328,13 @@ class ToolExecutor @Inject constructor(
             val summary = if (status == "success") "debug build (agent), APK ${apkPath?.let { File(it).name }}"
                 else "debug build (agent), error: ${errorMsg?.lineSequence()?.firstOrNull().orEmpty().take(300)}"
             withContext(Dispatchers.IO) {
-                runCatching { com.bori.core.project.agent.AgentFiles.appendBuildResult(File(project.rootPath), status == "success", summary) }
+                runCatching { com.bori.core.project.agent.AgentFiles.appendBuildResult(File(project.rootPath), status == "success", summary, if (startedAt > 0) System.currentTimeMillis() - startedAt else null) }
             }
         }
 
         val tail = allLogs.takeLast(20)
         val sb = StringBuilder()
-        sb.appendLine("Build $status.")
+        sb.appendLine("Build $status" + (if (startedAt > 0) " in ${com.bori.core.project.agent.AgentFiles.formatDuration(System.currentTimeMillis() - startedAt)}." else "."))
         apkPath?.let { sb.appendLine("APK: $it") }
         errorMsg?.let { sb.appendLine("Error: $it") }
         sb.appendLine("--- Last ${tail.size} log lines ---")

@@ -201,5 +201,8 @@ class ProotLauncher @Inject constructor(
 
         /** Private drop box shared with Bori Code (browser handoff); not part of the workspace. */
         const val GUEST_HANDOFF = "/run/bori"
+
+        /** In [handoffDir]: the phone's heat and battery, written by Bori Code for `bori-device`. */
+        const val DEVICE_FILE = "device"
     }
 }

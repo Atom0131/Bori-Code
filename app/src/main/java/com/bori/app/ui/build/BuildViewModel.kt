@@ -89,4 +89,14 @@ class BuildViewModel @Inject constructor(
     }
 
     fun reset() = buildRunner.reset()
+
+    /**
+     * "Last debug build took about 3 min" for the open project, so the user can weigh a long build
+     * (the phone heats up) before tapping Build. Null if it hasn't been built here yet.
+     */
+    fun lastBuildNote(v: BuildVariant): String? {
+        val root = projectStateHolder.activeProject.value?.rootPath ?: return null
+        val ms = buildRunner.lastDurationMs(root, v) ?: return null
+        return "Last ${v.name.lowercase()} build took ${com.bori.core.project.agent.AgentFiles.formatDuration(ms)}"
+    }
 }

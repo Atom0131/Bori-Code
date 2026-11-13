@@ -48,6 +48,8 @@ class ProotShells @Inject constructor(
 
     override fun guestHome(distroId: String): File = File(proot.rootfs(distroId), "root")
 
+    override fun deviceStatusFile(): File = File(proot.handoffDir, ProotLauncher.DEVICE_FILE)
+
     override fun installedClis(distroId: String): List<CliLauncher> {
         val distro = DistroCatalog.get(distroId) ?: return emptyList()
         return (CodingCli.builtIns.filter { it.availableIn(distro) } + customClis.forDistro(distroId))

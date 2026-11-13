@@ -27,6 +27,9 @@ interface LinuxShells {
      * script ("working", "notify", "done"), with the hook's JSON.
      */
     fun setAgentStateListener(listener: (tabId: Int, state: String, json: String) -> Unit)
+
+    /** Where the phone's heat and battery go for the guest's `bori-device`; null without Linux. */
+    fun deviceStatusFile(): File? = null
 }
 
 /**

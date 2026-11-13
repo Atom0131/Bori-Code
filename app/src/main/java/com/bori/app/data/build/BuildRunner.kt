@@ -1,5 +1,6 @@
 package com.bori.app.data.build
 
+import com.bori.core.project.agent.AgentFiles
 import android.content.Context
 import com.bori.app.data.prefs.UserPreferencesRepository
 import com.bori.app.service.ChatForegroundService
@@ -51,6 +52,20 @@ class BuildRunner @Inject constructor(
     private val _logs = MutableStateFlow<List<BuildEvent.Log>>(emptyList())
     val logs: StateFlow<List<BuildEvent.Log>> = _logs.asStateFlow()
 
+    private val times by lazy { context.getSharedPreferences("build_times", Context.MODE_PRIVATE) }
+
+    /**
+     * How long [variant] last took to build for the project at [rootPath] (waiting for another build
+     * not counted), or null if it hasn't been built on this phone. The Build sheet shows it before
+     * you tap Build; the agents read it from .bori/handoff.md.
+     */
+    fun lastDurationMs(rootPath: String, variant: BuildVariant): Long? =
+        times.getLong("$rootPath|${variant.name}", 0L).takeIf { it > 0 }
+
+    private fun recordDuration(rootPath: String, variant: BuildVariant, ms: Long) {
+        if (rootPath.isNotBlank()) times.edit().putLong("$rootPath|${variant.name}", ms).apply()
+    }
+
     fun start(project: Project, variant: BuildVariant, appBundle: Boolean) {
         if (_uiState.value is UiState.Building) return
         _logs.value = emptyList()
@@ -63,6 +78,7 @@ class BuildRunner @Inject constructor(
                 val prefs = prefsRepository.preferences.first()
                 val allMessages = mutableListOf<String>()
                 buildLock.withLock(onWait = { _logs.update { it + BuildEvent.Log(BuildLock.WAITING) } }) {
+                    val startedAt = System.currentTimeMillis()
                     buildEngine.build(
                         project = project,
                         kotlinTimeoutSeconds = prefs.kotlinTimeoutMinutes * 60L,
@@ -82,19 +98,27 @@ class BuildRunner @Inject constructor(
                                 // A bundle can't be installed; the last APK stays the one Install uses.
                                 if (!event.apkPath.endsWith(".aab")) buildStateHolder.onSuccess(event.apkPath, event.applicationId)
                                 diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
+                                val took = System.currentTimeMillis() - startedAt
+                                recordDuration(project.rootPath, variant, took)
                                 val copy = copyToProject(project.rootPath, File(event.apkPath), variant)
                                 copy?.let { _logs.update { l -> l + BuildEvent.Log("Copied to $it in the project folder") } }
+                                _logs.update { l -> l + BuildEvent.Log("Took ${AgentFiles.formatDuration(took)}") }
                                 recordBuildForAgents(
                                     project.rootPath, ok = true,
                                     "${variant.name.lowercase()} build, ${File(event.apkPath).name}" +
                                         (copy?.let { "\nOutput: $it (in the project folder; upload it from there, e.g. `gh release create`)" } ?: ""),
+                                    took,
                                 )
                             }
                             is BuildEvent.Failure -> {
                                 _uiState.value = UiState.Failed(event.error)
                                 buildStateHolder.onFailure(event.error)
                                 diagnosticsStateHolder.update(DiagnosticParser.parse(allMessages))
-                                recordBuildForAgents(project.rootPath, ok = false, "${variant.name.lowercase()} build, error: ${event.error.lineSequence().firstOrNull().orEmpty().take(300)}")
+                                recordBuildForAgents(
+                                    project.rootPath, ok = false,
+                                    "${variant.name.lowercase()} build, error: ${event.error.lineSequence().firstOrNull().orEmpty().take(300)}",
+                                    System.currentTimeMillis() - startedAt,
+                                )
                             }
                             BuildEvent.Started -> Unit
                         }
@@ -145,10 +169,10 @@ class BuildRunner @Inject constructor(
     }
 
     /** Every agent (built-in, Claude Code, Antigravity) reads the last real build from .bori/handoff.md. */
-    private fun recordBuildForAgents(rootPath: String, ok: Boolean, summary: String) {
+    private fun recordBuildForAgents(rootPath: String, ok: Boolean, summary: String, tookMs: Long) {
         if (rootPath.isBlank()) return
         scope.launch(Dispatchers.IO) {
-            runCatching { com.bori.core.project.agent.AgentFiles.appendBuildResult(File(rootPath), ok, summary) }
+            runCatching { AgentFiles.appendBuildResult(File(rootPath), ok, summary, tookMs) }
         }
     }
 }

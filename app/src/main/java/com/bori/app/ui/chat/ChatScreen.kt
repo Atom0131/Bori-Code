@@ -607,20 +607,24 @@ fun ChatScreen(
     ) { padding ->
         // On an unfolded screen the conversation stays at a readable width, centered.
         Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
-        Column(
+        // The room left above the keyboard decides the layout, whatever the keyboard's height, the fold
+        // state or the split: below TIGHT_HEIGHT the extras fold away so the composer always fits.
+        androidx.compose.foundation.layout.BoxWithConstraints(
             modifier = Modifier
                 .fillMaxHeight()
                 .widthIn(max = 760.dp)
                 .fillMaxWidth()
                 .imePadding()
         ) {
+        val tight = maxHeight < TIGHT_HEIGHT
+        Column(modifier = Modifier.fillMaxSize()) {
             if (isLoading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             if (isPlanMode && pendingPlan == null) PlanModeBanner(aiName)
             if (isAskMode && pendingQuestions == null && pendingPlan == null) AskModeBanner(aiName)
             if (!hasActiveProject) NoProjectBanner()
-            com.bori.app.ui.common.AgentLockBanner(otherAgentLock)
-            com.bori.app.ui.common.FoldTipBanner()
-            AnimatedVisibility(visible = showCompactBanner && !isCompacting) {
+            com.bori.app.ui.common.AgentLockBanner(otherAgentLock, compact = tight)
+            if (!tight) com.bori.app.ui.common.FoldTipBanner()
+            AnimatedVisibility(visible = showCompactBanner && !isCompacting && !tight) {
                 CompactConversationBanner(
                     onCompact = { viewModel.compactConversation() },
                     onDismiss = { viewModel.dismissCompactBanner() },
@@ -702,7 +706,10 @@ fun ChatScreen(
                     }
                 }
             }
+            // Measured before the messages (they take what's left), so the composer always gets its full
+            // height. The cards above it shrink and scroll when there's little room.
             Column(modifier = Modifier.fillMaxWidth().background(bgColor)) {
+                Column(modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
                 if (pendingPlanModeRequest != null) {
                     PlanModeSuggestionCard(
                         request       = pendingPlanModeRequest!!,
@@ -889,7 +896,9 @@ fun ChatScreen(
                             viewModel.startTerminalAgent(agent, input)
                             input = ""
                         },
+                        compact = tight,
                     )
+                }
                 }
                 val chipLabel = terminalTarget?.agent ?: agentShortLabel(userPrefs.chatProvider)
                 PillInputBar(
@@ -937,13 +946,18 @@ fun ChatScreen(
                     onProviderChipClick = {
                         if (terminalTarget != null) { viewModel.showTargetInTerminal(); onOpenTerminal() } else showModelMenu = true
                     },
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    compact = tight,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = if (tight) 4.dp else 6.dp),
                 )
             }
         }
         }
+        }
     }
 }
+
+/** Below this much room (keyboard up in landscape, a tall keyboard, a small split) Chat goes compact. */
+private val TIGHT_HEIGHT = 380.dp
 
 @Composable
 private fun EmptyStateContent(
@@ -1066,10 +1080,137 @@ private fun PillInputBar(
     onAttachProject: () -> Unit,
     onShowCommands: () -> Unit,
     onProviderChipClick: () -> Unit,
+    /** Little room above the keyboard: the field and Send share one row; the chips wait for more room. */
+    compact: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val canSend = input.isNotBlank() && pendingApproval == null && !isLoading
     val border = MaterialTheme.colorScheme.outlineVariant
+    val attachButton: @Composable () -> Unit = {
+        Box {
+            androidx.compose.material3.IconButton(
+                onClick = onCaretClick,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "Attach",
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            BoriDropdownMenu(
+                expanded = showAttachMenu,
+                onDismissRequest = onAttachMenuDismiss,
+            ) {
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text("Commands", style = MaterialTheme.typography.bodyMedium)
+                            Text("/plan, /ask, /tutorial, /explain, /fix, /test, /refactor, /docs", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    },
+                    leadingIcon = { Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    onClick = { onAttachMenuDismiss(); onShowCommands() },
+                )
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text("Image", style = MaterialTheme.typography.bodyMedium)
+                            Text("JPEG, PNG, WebP, GIF", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    },
+                    leadingIcon = { Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    onClick = { onAttachMenuDismiss(); onPickImage() },
+                )
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text("Document", style = MaterialTheme.typography.bodyMedium)
+                            Text(".txt, .md, .kt, .java, .xml, .json, .kts, .py, .js, .ts, .html, .css", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    },
+                    leadingIcon = { Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    onClick = { onAttachMenuDismiss(); onPickDocument() },
+                )
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text("Project Context", style = MaterialTheme.typography.bodyMedium)
+                            Text("Active project file tree", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    },
+                    leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    onClick = { onAttachMenuDismiss(); onAttachProject() },
+                )
+            }
+        }
+    }
+    val textField: @Composable (Modifier) -> Unit = { fieldModifier ->
+        BasicTextField(
+            value = input,
+            onValueChange = onInputChange,
+            modifier = fieldModifier,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                color = MaterialTheme.colorScheme.onSurface,
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            maxLines = if (compact) 3 else 6,
+            decorationBox = { innerTextField ->
+                if (input.isEmpty()) {
+                    Text(
+                        if (isLoading) "Thinking…" else "Ask me anything…",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                innerTextField()
+            },
+        )
+    }
+    val sendButton: @Composable () -> Unit = {
+        Surface(
+            shape = CircleShape,
+            color = when {
+                isLoading -> MaterialTheme.colorScheme.error
+                // sendColor = the user's chosen chat bubble color (threaded from prefs).
+                canSend   -> sendColor
+                else      -> MaterialTheme.colorScheme.surfaceContainerHighest
+            },
+            // 48 dp, Android's minimum touch size: at 38 dp with a 16 dp arrow it was hard to hit
+            // with the keyboard up on the unfolded Fold in landscape. requiredSize keeps the chips
+            // in this row from squeezing it smaller.
+            modifier = Modifier
+                .requiredSize(48.dp)
+                .clickable(enabled = isLoading || canSend) {
+                    if (isLoading) onStop() else onSend()
+                },
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                if (isLoading) {
+                    Icon(
+                        Icons.Default.Stop,
+                        contentDescription = "Stop",
+                        tint = MaterialTheme.colorScheme.onError,
+                        modifier = Modifier.size(if (isLoading) 20.dp else 22.dp),
+                    )
+                } else {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Send",
+                        tint = if (canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.size(if (isLoading) 20.dp else 22.dp),
+                    )
+                }
+            }
+        }
+    }
+    // One tree for both layouts: the text field keeps its place (and its focus) when the keyboard's
+    // arrival makes Chat compact. Building a second field there dropped focus, Compose hid the
+    // keyboard, the room came back, and the keyboard never stayed up.
     ChatPanel(
         modifier = modifier.fillMaxWidth(),
         fill = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -1077,34 +1218,26 @@ private fun PillInputBar(
         tier = PanelTier.CARD,
     ) {
         Column {
-            // ---- Text area ----
-            Box(
+            // ---- Text area (compact: attach, field and Send share this row) ----
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 10.dp),
-            ) {
-                BasicTextField(
-                    value = input,
-                    onValueChange = onInputChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(
-                        color = MaterialTheme.colorScheme.onSurface,
+                    .padding(
+                        start = if (compact) 4.dp else 16.dp,
+                        top = if (compact) 4.dp else 14.dp,
+                        end = if (compact) 6.dp else 16.dp,
+                        bottom = if (compact) 4.dp else 10.dp,
                     ),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    maxLines = 6,
-                    decorationBox = { innerTextField ->
-                        if (input.isEmpty()) {
-                            Text(
-                                if (isLoading) "Thinking…" else "Ask me anything…",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        innerTextField()
-                    },
-                )
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (compact) attachButton()
+                Box(Modifier.weight(1f).padding(horizontal = if (compact) 6.dp else 0.dp, vertical = if (compact) 8.dp else 0.dp)) {
+                    textField(Modifier.fillMaxWidth())
+                }
+                if (compact) sendButton()
             }
-            // ---- Action row ----
+            // ---- Action row (chips wait for more room) ----
+            if (!compact) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1112,65 +1245,7 @@ private fun PillInputBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                // + attach button
-                Box {
-                    androidx.compose.material3.IconButton(
-                        onClick = onCaretClick,
-                        modifier = Modifier.size(40.dp),
-                    ) {
-                        Icon(
-                            Icons.Default.Add,
-                            contentDescription = "Attach",
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    BoriDropdownMenu(
-                        expanded = showAttachMenu,
-                        onDismissRequest = onAttachMenuDismiss,
-                    ) {
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text("Commands", style = MaterialTheme.typography.bodyMedium)
-                                    Text("/plan, /ask, /tutorial, /explain, /fix, /test, /refactor, /docs", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            },
-                            leadingIcon = { Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                            onClick = { onAttachMenuDismiss(); onShowCommands() },
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text("Image", style = MaterialTheme.typography.bodyMedium)
-                                    Text("JPEG, PNG, WebP, GIF", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            },
-                            leadingIcon = { Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                            onClick = { onAttachMenuDismiss(); onPickImage() },
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text("Document", style = MaterialTheme.typography.bodyMedium)
-                                    Text(".txt, .md, .kt, .java, .xml, .json, .kts, .py, .js, .ts, .html, .css", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            },
-                            leadingIcon = { Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                            onClick = { onAttachMenuDismiss(); onPickDocument() },
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text("Project Context", style = MaterialTheme.typography.bodyMedium)
-                                    Text("Active project file tree", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            },
-                            leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                            onClick = { onAttachMenuDismiss(); onAttachProject() },
-                        )
-                    }
-                }
+                attachButton()
                 // Provider chip
                 Surface(
                     shape = RoundedCornerShape(50),
@@ -1211,45 +1286,8 @@ private fun PillInputBar(
                     }
                 }
                 Spacer(Modifier.weight(1f))
-                // Send / Stop button
-                Surface(
-                    shape = CircleShape,
-                    color = when {
-                        isLoading -> MaterialTheme.colorScheme.error
-                        // sendColor = the user's chosen chat bubble color (threaded from prefs).
-                        canSend   -> sendColor
-                        else      -> MaterialTheme.colorScheme.surfaceContainerHighest
-                    },
-                    // 48 dp, Android's minimum touch size: at 38 dp with a 16 dp arrow it was hard to hit
-                    // with the keyboard up on the unfolded Fold in landscape. requiredSize keeps the chips
-                    // in this row from squeezing it smaller.
-                    modifier = Modifier
-                        .requiredSize(48.dp)
-                        .clickable(enabled = isLoading || canSend) {
-                            if (isLoading) onStop() else onSend()
-                        },
-                ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        if (isLoading) {
-                            Icon(
-                                Icons.Default.Stop,
-                                contentDescription = "Stop",
-                                tint = MaterialTheme.colorScheme.onError,
-                                modifier = Modifier.size(if (isLoading) 20.dp else 22.dp),
-                            )
-                        } else {
-                            Icon(
-                                Icons.AutoMirrored.Filled.Send,
-                                contentDescription = "Send",
-                                tint = if (canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                modifier = Modifier.size(if (isLoading) 20.dp else 22.dp),
-                            )
-                        }
-                    }
-                }
+                sendButton()
+            }
             }
         }
     }
@@ -2119,6 +2157,8 @@ private fun TerminalTargetBar(
     onOpenTerminal: () -> Unit,
     onStartMenu: () -> Unit,
     onStart: (com.bori.app.terminal.TerminalBridge.Startable) -> Unit,
+    /** Little room (keyboard up in landscape): the status goes into the chips' row, one line in all. */
+    compact: Boolean = false,
 ) {
     var startMenu by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
@@ -2127,6 +2167,9 @@ private fun TerminalTargetBar(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (compact && chosen != null) {
+                TargetStatusLine(chosen, live, onOpenTerminal, compact = true)
+            }
             Text("Send to", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             FilterChip(colors = crystalFilterChipColors(), selected = chosen == null, onClick = { onChoose(null) }, label = { Text("Bori agent") })
             val sameAgent = targets.groupingBy { it.agent }.eachCount()
@@ -2156,41 +2199,52 @@ private fun TerminalTargetBar(
                 }
             }
         }
-        if (chosen != null) {
-            val waiting = live.menu != null || live.waiting
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                // The CLI's mode, as its footer shows it ("⏸ plan mode on"): Shift+Tab in the terminal changes it.
-                live.mode?.let { mode ->
-                    Text(
-                        mode,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer,
-                        modifier = Modifier
-                            .padding(end = 8.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(MaterialTheme.colorScheme.tertiaryContainer)
-                            .padding(horizontal = 10.dp, vertical = 4.dp),
-                    )
-                }
-                Text(
-                    when {
-                        // The same words the terminal shows ("Flabbergasting…"), not a fixed "working".
-                        waiting -> "${chosen.agent} is asking you. Answer below or in the terminal."
-                        live.status != null -> "${chosen.agent}: ${live.status.verb}"
-                        live.error != null -> "${chosen.agent} hit an API error. Retry below, or send a message."
-                        // The hooks can leave WORKING behind (an Esc interrupt fires none): the screen decides.
-                        chosen.state == com.bori.app.service.StatusNotifier.AgentState.WORKING && !live.atPrompt -> "${chosen.agent} is working…"
-                        chosen.state != null && live.atPrompt -> "${chosen.agent} is ready. Your turn."
-                        chosen.state == com.bori.app.service.StatusNotifier.AgentState.DONE -> "${chosen.agent} is done. Your turn."
-                        else -> "Typed into ${chosen.title}, as if you typed it in the terminal"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (waiting || live.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = onOpenTerminal) { Text(if (waiting) "Open terminal" else "Show terminal") }
-            }
+        if (chosen != null && !compact) TargetStatusLine(chosen, live, onOpenTerminal, compact = false)
+    }
+}
+
+/** What the chosen terminal's agent is doing, and a button to show it: its own line, or (compact) inline. */
+@Composable
+private fun TargetStatusLine(
+    chosen: com.bori.app.terminal.TerminalBridge.Target,
+    live: com.bori.app.terminal.TerminalBridge.Live,
+    onOpenTerminal: () -> Unit,
+    compact: Boolean,
+) {
+    val waiting = live.menu != null || live.waiting
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = if (compact) Modifier else Modifier.fillMaxWidth()) {
+        // The CLI's mode, as its footer shows it ("⏸ plan mode on"): Shift+Tab in the terminal changes it.
+        live.mode?.let { mode ->
+            Text(
+                mode,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.tertiaryContainer)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            )
         }
+        Text(
+            when {
+                // The same words the terminal shows ("Flabbergasting…"), not a fixed "working".
+                waiting -> "${chosen.agent} is asking you. Answer below or in the terminal."
+                live.status != null -> "${chosen.agent}: ${live.status.verb}"
+                live.error != null -> "${chosen.agent} hit an API error. Retry below, or send a message."
+                // The hooks can leave WORKING behind (an Esc interrupt fires none): the screen decides.
+                chosen.state == com.bori.app.service.StatusNotifier.AgentState.WORKING && !live.atPrompt -> "${chosen.agent} is working…"
+                chosen.state != null && live.atPrompt -> "${chosen.agent} is ready. Your turn."
+                chosen.state == com.bori.app.service.StatusNotifier.AgentState.DONE -> "${chosen.agent} is done. Your turn."
+                else -> "Typed into ${chosen.title}, as if you typed it in the terminal"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (waiting || live.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = if (compact) 1 else Int.MAX_VALUE,
+            overflow = TextOverflow.Ellipsis,
+            modifier = if (compact) Modifier.widthIn(max = 320.dp) else Modifier.weight(1f),
+        )
+        TextButton(onClick = onOpenTerminal) { Text(if (waiting) "Open terminal" else "Show terminal") }
     }
 }
 

@@ -67,7 +67,7 @@ class TerminalService : Service() {
             0
         }
         ServiceCompat.startForeground(this, StatusNotifier.NOTIFICATION_ID, StatusNotifier.build(this), type)
-        StatusNotifier.hold(TAG)
+        StatusNotifier.hold(this, TAG)
         // Programs left on a dead PTY by an earlier run (see ProcessReaper).
         ProcessReaper.sweepOrphans()
         return START_NOT_STICKY
@@ -75,7 +75,7 @@ class TerminalService : Service() {
 
     override fun onDestroy() {
         keepAwake(this, false)
-        StatusNotifier.release(TAG)
+        StatusNotifier.release(this, TAG)
         super.onDestroy()
     }
 

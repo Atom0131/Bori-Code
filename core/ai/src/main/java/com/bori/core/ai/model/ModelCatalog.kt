@@ -153,10 +153,15 @@ object ModelCatalog {
             defaultChat = "default",
             defaultCompletion = "",
         ),
-        // From `antigravity models` (1.4.7, 2026-10-25).
+        // From `antigravity models` (1.4.7, 2026-10-25), plus Gemini 4 Hydrogen and the Orchestrator
+        // (antigravity.google/docs/models, 2026-11-13; they need an Antigravity from November 2026 on).
+        // Chat also asks the installed CLI for its list once per app start (CliAgentClient.listModels),
+        // so later models show without an app update.
         AiProvider.ANTIGRAVITY to ProviderModels(
             chat = listOf(
                 Model("default", note = "The model set in Antigravity (/model)"),
+                Model("gemini-4-hydrogen-xhigh", note = "Gemini 4 Hydrogen: fast agentic coding (needs an updated Antigravity)"),
+                Model("Orchestrator (Carbon)", note = "Carbon plans, Hydrogen does the work (needs an updated Antigravity)"),
                 Model("gemini-4-argon-medium"),
                 Model("gemini-4-argon-high", note = "Slower, for hard problems"),
                 Model("gemini-3.8-flash-medium", note = "Fast"),

@@ -107,7 +107,7 @@ class ChatForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(StatusNotifier.NOTIFICATION_ID, StatusNotifier.build(this))
-        StatusNotifier.hold(TAG)
+        StatusNotifier.hold(this, TAG)
         if (synchronized(active) { starting = false; active.isEmpty() }) {
             // Every reason was released before the service got here.
             instance = null
@@ -126,7 +126,7 @@ class ChatForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        StatusNotifier.release(TAG)
+        StatusNotifier.release(this, TAG)
         if (instance === this) instance = null
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null

@@ -38,6 +38,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         liveDiagnosticsController.start()
+        // The stats panel over other apps, if the user left it on (Settings → Appearance → Stats).
+        com.bori.app.flavor.FloatingStats.sync(this)
         setContent {
             val prefs by prefsRepository.preferences.collectAsState(initial = null)
             // While Settings' Glass Intensity slider is held, the app repaints at that value.
