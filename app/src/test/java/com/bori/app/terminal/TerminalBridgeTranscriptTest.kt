@@ -24,6 +24,14 @@ class TerminalBridgeTranscriptTest {
         assertEquals("[Bash] ./gradlew build\nBUILD SUCCESSFUL\nin 3s", m[2].content)
     }
 
+    @Test fun apiErrorIsMarked() {
+        val m = read(
+            """{"type":"user","message":{"role":"user","content":"go"}}""",
+            """{"type":"assistant","isApiErrorMessage":true,"error":"server_error","message":{"content":[{"type":"text","text":"API Error: 529 Overloaded"}]}}""",
+        )
+        assertEquals("⚠ API Error: 529 Overloaded", m.last().content)
+    }
+
     @Test fun errorOutputIsMarked() {
         val m = read(
             """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/x"}}]}}""",

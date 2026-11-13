@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -775,6 +776,14 @@ fun ChatScreen(
                             onShowTerminal = { viewModel.showTargetInTerminal(); onOpenTerminal() },
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                         )
+                    } else if (terminalLive.error != null && terminalLive.status == null) {
+                        CliErrorCard(
+                            agent = terminalTarget!!.agent,
+                            error = terminalLive.error!!,
+                            onRetry = { viewModel.retryTerminal() },
+                            onShowTerminal = { viewModel.showTargetInTerminal(); onOpenTerminal() },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        )
                     } else terminalLive.status?.let { status ->
                         CliStatusRow(
                             status = status,
@@ -1211,8 +1220,11 @@ private fun PillInputBar(
                         canSend   -> sendColor
                         else      -> MaterialTheme.colorScheme.surfaceContainerHighest
                     },
+                    // 48 dp, Android's minimum touch size: at 38 dp with a 16 dp arrow it was hard to hit
+                    // with the keyboard up on the unfolded Fold in landscape. requiredSize keeps the chips
+                    // in this row from squeezing it smaller.
                     modifier = Modifier
-                        .size(38.dp)
+                        .requiredSize(48.dp)
                         .clickable(enabled = isLoading || canSend) {
                             if (isLoading) onStop() else onSend()
                         },
@@ -1226,14 +1238,14 @@ private fun PillInputBar(
                                 Icons.Default.Stop,
                                 contentDescription = "Stop",
                                 tint = MaterialTheme.colorScheme.onError,
-                                modifier = Modifier.size(16.dp),
+                                modifier = Modifier.size(if (isLoading) 20.dp else 22.dp),
                             )
                         } else {
                             Icon(
                                 Icons.AutoMirrored.Filled.Send,
                                 contentDescription = "Send",
                                 tint = if (canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                modifier = Modifier.size(16.dp),
+                                modifier = Modifier.size(if (isLoading) 20.dp else 22.dp),
                             )
                         }
                     }
@@ -2165,12 +2177,15 @@ private fun TerminalTargetBar(
                         // The same words the terminal shows ("Flabbergasting…"), not a fixed "working".
                         waiting -> "${chosen.agent} is asking you. Answer below or in the terminal."
                         live.status != null -> "${chosen.agent}: ${live.status.verb}"
-                        chosen.state == com.bori.app.service.StatusNotifier.AgentState.WORKING -> "${chosen.agent} is working…"
+                        live.error != null -> "${chosen.agent} hit an API error. Retry below, or send a message."
+                        // The hooks can leave WORKING behind (an Esc interrupt fires none): the screen decides.
+                        chosen.state == com.bori.app.service.StatusNotifier.AgentState.WORKING && !live.atPrompt -> "${chosen.agent} is working…"
+                        chosen.state != null && live.atPrompt -> "${chosen.agent} is ready. Your turn."
                         chosen.state == com.bori.app.service.StatusNotifier.AgentState.DONE -> "${chosen.agent} is done. Your turn."
                         else -> "Typed into ${chosen.title}, as if you typed it in the terminal"
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (waiting) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (waiting || live.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = onOpenTerminal) { Text(if (waiting) "Open terminal" else "Show terminal") }
@@ -2410,6 +2425,39 @@ private fun CliStatusRow(
                 Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.size(4.dp))
                 Text("Stop")
+            }
+        }
+    }
+}
+
+/**
+ * The CLI's last turn ended on an API error (overloaded, rate limit, no network): what it said, and
+ * Retry, which types "continue" so it picks the turn up again.
+ */
+@Composable
+private fun CliErrorCard(
+    agent: String,
+    error: String,
+    onRetry: () -> Unit,
+    onShowTerminal: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val notice = noticeColors(NoticeTone.WARNING)
+    ChatPanel(modifier = modifier, fill = notice.fill, contentColor = notice.text, tier = PanelTier.CARD) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("$agent stopped on an API error", style = MaterialTheme.typography.labelMedium, color = notice.tint)
+            Text(
+                error,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = notice.text,
+                maxLines = 6,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onRetry) { Text("Retry") }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onShowTerminal) { Text("Show terminal") }
             }
         }
     }

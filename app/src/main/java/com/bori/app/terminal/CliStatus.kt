@@ -77,6 +77,50 @@ object CliStatus {
         menu(lines) == null && lines.map(::clean).filter { it.isNotEmpty() }.takeLast(PROMPT_SCAN).any { PROMPT.containsMatchIn(it) }
 
     private const val PROMPT_SCAN = 8
+
+    /** Claude Code's turn-ending errors: `⎿ API Error: 529 …`, `API Error (Connection error.)`, a usage limit. */
+    private val API_ERROR = Regex(
+        "API Error\\b.*|\\b(?:usage limit reached|hit your limit|rate limit(?:ed)?|overloaded_error|Overloaded)\\b.*",
+        RegexOption.IGNORE_CASE,
+    )
+    /** A message mark (`⏺ text`): an error above the newest one belongs to an older turn. */
+    private val MESSAGE_MARK = Regex("^[⏺●]\\s")
+    private const val ERROR_SCAN = 20
+
+    /**
+     * The API error that ended the CLI's last turn, as the screen shows it, or null. Only while it isn't
+     * working (a "Retrying in 5 s…" error has the spinner under it) and no menu is up, and only below the
+     * newest message, so an error from an earlier turn isn't shown again.
+     */
+    fun apiError(lines: List<String>): String? {
+        if (menu(lines) != null || parse(lines) != null) return null
+        val rows = lines.map(::clean).filter { it.isNotEmpty() }.takeLast(ERROR_SCAN)
+        for (row in rows.reversed()) {
+            if (MESSAGE_MARK.containsMatchIn(row)) return null
+            val m = API_ERROR.find(row) ?: continue
+            return m.value.trim().take(ERROR_CHARS)
+        }
+        return null
+    }
+
+    private const val ERROR_CHARS = 300
+
+    /** Words a question on screen has; a screen with none of them isn't asking anything. */
+    private val ASK_CUE = Regex("\\?|\\b(yes|no|allow|deny|approve|proceed|permission|continue)\\b", RegexOption.IGNORE_CASE)
+
+    /**
+     * Whether the bottom of the screen could be a question the menu parser couldn't read. Used to tell a
+     * real approval from a WAITING the CLI's hooks left behind (no hook fires when an approval is turned
+     * down or a turn ends on an API error).
+     */
+    fun mayBeAsking(lines: List<String>): Boolean =
+        apiError(lines) == null && !atPrompt(lines) &&
+            lines.map(::clean).filter { it.isNotEmpty() }.takeLast(PROMPT_SCAN)
+                .any { ASK_CUE.containsMatchIn(it) && !INTERRUPTED.containsMatchIn(it) }
+
+    /** "⎿ Interrupted · What should Claude do instead?": a turned-down approval, answered at the input line. */
+    private val INTERRUPTED = Regex("\\bInterrupted\\b", RegexOption.IGNORE_CASE)
+
     private const val STEPS_SCAN = 8
     private const val QUESTION_LINES = 4
 

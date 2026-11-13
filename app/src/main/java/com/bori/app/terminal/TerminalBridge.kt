@@ -62,7 +62,7 @@ class TerminalBridge @Inject constructor(
             // Asking, but its menu couldn't be read: Enter there would pick the highlighted answer.
             // At its input line (a "tell Claude what to do instead" box, or an approval already
             // answered) the text is what it waits for.
-            AgentState.WAITING -> if (!CliStatus.atPrompt(lines) && CliStatus.parse(lines) == null) {
+            AgentState.WAITING -> if (CliStatus.mayBeAsking(lines) && CliStatus.parse(lines) == null) {
                 "$name is asking something in the terminal: answer it with the buttons above first."
             } else { manager.typeLine(tab.session, text); null }
             AgentState.WORKING -> if (CliStatus.parse(lines) != null) {
@@ -84,6 +84,10 @@ class TerminalBridge @Inject constructor(
         val screenTail: List<String> = emptyList(),
         /** The CLI's mode when it isn't the default ("Plan mode", "Accept edits"). */
         val mode: String? = null,
+        /** The API error its last turn ended on (from the screen, or Claude Code's StopFailure hook). */
+        val error: String? = null,
+        /** Its input line is showing: it's ready for a message, whatever a stale hook state says. */
+        val atPrompt: Boolean = false,
     )
 
     /** Tab [tabId]'s live status and menu, re-read from its screen a few times a second while collected. */
@@ -95,8 +99,13 @@ class TerminalBridge @Inject constructor(
                 val status = if (menu == null) CliStatus.parse(lines) else null
                 // WAITING outlives its question (it clears on the next hook): not while the spinner runs
                 // again, and not at the input line after an approval was answered or turned down.
-                val waiting = manager.agentStateMap.value[tabId] == AgentState.WAITING &&
-                    status == null && menu == null && !CliStatus.atPrompt(lines)
+                // Nor once nothing on screen reads like a question: an approval turned down or a turn
+                // ended on an API error fires no hook, and the old WAITING would hang on as an approval.
+                val state = manager.agentStateMap.value[tabId]
+                val waiting = state == AgentState.WAITING &&
+                    status == null && menu == null && CliStatus.mayBeAsking(lines)
+                val error = if (status != null || menu != null) null
+                    else CliStatus.apiError(lines) ?: manager.agentDetails.value[tabId]?.takeIf { state == AgentState.ERROR }
                 emit(Live(
                     status = status,
                     menu = menu,
@@ -105,6 +114,8 @@ class TerminalBridge @Inject constructor(
                         lines.map(CliStatus::clean).filter { it.isNotEmpty() }.takeLast(TAIL_LINES)
                     } else emptyList(),
                     mode = CliStatus.mode(lines),
+                    error = error,
+                    atPrompt = menu == null && status == null && CliStatus.atPrompt(lines),
                 ))
             }
             delay(LIVE_POLL_MS)
@@ -144,6 +155,9 @@ class TerminalBridge @Inject constructor(
         val after = withContext(Dispatchers.Main) { manager.bottomLines(tabId, SCAN_LINES) } ?: return
         if (after == before && manager.agentStateMap.value[tabId] == AgentState.WAITING) manager.writeKeys(tabId, "\r")
     }
+
+    /** After an API error: asks the CLI to pick up where the failed turn stopped. */
+    fun retry(tabId: Int): String? = send(tabId, "continue")
 
     /**
      * Answers the menu on tab [tabId] with typed [text], through its option [number] that asks for
@@ -335,7 +349,10 @@ class TerminalBridge @Inject constructor(
                 }
                 "assistant" -> if (content is JSONArray) blocks(content).forEach { b ->
                     when (b.optString("type")) {
-                        "text" -> add("assistant", b.optString("text"))
+                        // The error a turn ended on, written by Claude Code itself ("API Error: 529 …").
+                        "text" -> if (o.optBoolean("isApiErrorMessage")) {
+                            add("assistant", "⚠ " + b.optString("text").trim().ifEmpty { "API error" })
+                        } else add("assistant", b.optString("text"))
                         "thinking" -> add("thinking", b.optString("thinking"))
                         "tool_use" -> add("tool_result", toolLine(b.optString("name"), b.optJSONObject("input")))
                             ?.let { id -> b.optString("id").takeIf { it.isNotEmpty() }?.let { toolMessages[it] = id } }

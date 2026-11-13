@@ -194,6 +194,12 @@ class ChatViewModel @Inject constructor(
     /** Esc in the terminal CLI: stop its turn, or cancel its menu. */
     fun interruptTerminal() { terminalTarget.value?.let { terminalBridge.interrupt(it.tabId) } }
 
+    /** Retry on the API error card: the CLI picks the failed turn up again. */
+    fun retryTerminal() {
+        val tabId = terminalTarget.value?.tabId ?: return
+        terminalBridge.retry(tabId)?.let { why -> viewModelScope.launch { _snackbarEvent.emit(why) } }
+    }
+
     private val _agentCommands = MutableStateFlow<List<com.bori.app.terminal.SlashCommand>>(emptyList())
     /** The "/" commands of the agent Chat sends to: the terminal CLI's, or Bori agent's own. */
     val agentCommands: StateFlow<List<com.bori.app.terminal.SlashCommand>> = _agentCommands.asStateFlow()

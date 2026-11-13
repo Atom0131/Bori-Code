@@ -185,6 +185,10 @@ class GuestPolicy @Inject constructor(
             |- There is no Gradle, JDK or Android SDK in this Linux environment. Don't run `gradlew` or
             |  `gradle`, and don't try to install them. After editing, tell the user to tap Build in
             |  Bori Code's Build tab, then Install APK.
+            |- Each successful build is copied into the project at
+            |  `app/build/outputs/apk/<debug|release>/app-<variant>.apk` (an app bundle at
+            |  `app/build/outputs/bundle/release/app-release.aab`), and `.bori/handoff.md` names it. Upload
+            |  that file to GitHub with `gh release create` / `gh release upload`; don't commit it.
             |- New apps: the easiest start is Bori Code's New Project, which fills in a working template
             |  (with a test button) for you to edit. If you create one yourself, make it a new folder
             |  directly in ${ProotLauncher.GUEST_WORKSPACE} with the same layout as an existing project:
@@ -281,8 +285,13 @@ class GuestPolicy @Inject constructor(
             put("hooks", JSONObject().apply {
                 put("UserPromptSubmit", hook("working"))
                 put("PostToolUse", hook("working"))
+                // A tool that failed or was refused: the turn goes on, so it's no longer asking.
+                put("PostToolUseFailure", hook("working"))
+                put("PermissionDenied", hook("working"))
                 put("Notification", hook("notify"))
                 put("Stop", hook("done"))
+                // The turn ended on an API error (overloaded, rate limit, network): Stop doesn't fire then.
+                put("StopFailure", hook("error"))
             })
             // Claude Code's diff panel opens by itself beside the conversation in a wide terminal
             // (the unfolded Fold) and squeezes the terminal; `/diff` still shows it when wanted.

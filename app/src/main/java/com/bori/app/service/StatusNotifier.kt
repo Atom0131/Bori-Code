@@ -26,7 +26,8 @@ object StatusNotifier {
     /** Channels from before the two notifications were merged. */
     private val OLD_CHANNELS = listOf("chat_generation_channel", "terminal_sessions_channel")
 
-    enum class AgentState(val label: String) { WORKING("working"), WAITING("needs you"), DONE("done") }
+    /** ERROR: its turn ended on an API error (Claude Code's StopFailure hook); it waits for the user again. */
+    enum class AgentState(val label: String) { WORKING("working"), WAITING("needs you"), DONE("done"), ERROR("hit an error") }
 
     /** A terminal tab running a coding CLI. [state] is null until the CLI reports one. */
     data class Agent(val title: String, val state: AgentState?, val autoEnters: Int?)
@@ -68,6 +69,7 @@ object StatusNotifier {
             ChatForegroundService.isBuilding() -> "Building"
             agents.any { it.state == AgentState.WAITING } -> "Waiting for you"
             agents.any { it.state == AgentState.WORKING } || keepAlive != null -> "Working"
+            agents.any { it.state == AgentState.ERROR } -> "Agent hit an error"
             agents.any { it.state == AgentState.DONE } -> "Done"
             terminalTabs > 0 -> "Terminal open"
             else -> "Ready"

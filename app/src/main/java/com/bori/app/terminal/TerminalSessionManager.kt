@@ -152,6 +152,11 @@ class TerminalSessionManager @Inject constructor(
         val next = when (state) {
             "working" -> AgentState.WORKING
             "done" -> AgentState.DONE
+            // StopFailure: the turn ended on an API error, and no Stop hook follows it.
+            "error" -> {
+                detail = runCatching { stopFailureText(JSONObject(json)) }.getOrNull()
+                AgentState.ERROR
+            }
             "notify" -> {
                 detail = runCatching { JSONObject(json).optString("message") }.getOrNull()?.ifBlank { null }
                 // The other notification is "waiting for your input" a minute after a turn: nothing new.
@@ -162,7 +167,23 @@ class TerminalSessionManager @Inject constructor(
         setAgentState(tabId, next, detail)
     }
 
+    /** What StopFailure says went wrong: the error message Claude Code showed, else its details or kind. */
+    private fun stopFailureText(o: JSONObject): String? {
+        fun text(v: Any?): String? = when (v) {
+            is String -> v
+            is JSONObject -> v.optString("message").ifBlank { null } ?: v.optString("type").ifBlank { null }
+            else -> null
+        }?.trim()?.ifBlank { null }
+        return (text(o.opt("last_assistant_message")) ?: text(o.opt("error_details")) ?: text(o.opt("error")))?.take(300)
+    }
+
+    private val _agentDetails = MutableStateFlow<Map<Int, String>>(emptyMap())
+    /** The error text of each tab whose last turn ended on an API error (state ERROR). */
+    val agentDetails: StateFlow<Map<Int, String>> = _agentDetails.asStateFlow()
+
     private fun setAgentState(tabId: Int, next: AgentState, detail: String?) {
+        _agentDetails.value = if (next == AgentState.ERROR) _agentDetails.value + (tabId to (detail ?: "API error"))
+            else _agentDetails.value - tabId
         val prev = agentStates.put(tabId, next)
         if (prev == next) return
         publish()
@@ -173,6 +194,7 @@ class TerminalSessionManager @Inject constructor(
             // Auto-enter answers it in a moment.
             AgentState.WAITING -> if (tabId !in autoEnters) StatusNotifier.alert(context, "$name needs you", detail ?: "It's waiting for your approval")
             AgentState.DONE -> if (prev == AgentState.WORKING) StatusNotifier.alert(context, "$name is done", tab.title)
+            AgentState.ERROR -> StatusNotifier.alert(context, "$name hit an error", detail ?: "Its turn ended on an API error")
             AgentState.WORKING -> Unit
         }
     }

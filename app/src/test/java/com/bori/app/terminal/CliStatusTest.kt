@@ -227,4 +227,48 @@ class CliStatusTest {
         assertTrue(!m.steps)
         assertTrue(m.options[1].asksText && !m.options[1].inline)
     }
+
+    @Test fun apiErrorAboveTheInputBox() {
+        val lines = screen("""
+            > fix the build
+              ⎿  API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+            ╭──────────────────────────────╮
+            │ >                            │
+            ╰──────────────────────────────╯
+              ⏵⏵ accept edits on (shift+tab to cycle)
+        """)
+        assertTrue(CliStatus.apiError(lines)!!.startsWith("API Error: 529"))
+        assertTrue(!CliStatus.mayBeAsking(lines))
+    }
+
+    @Test fun retryingErrorWithSpinnerIsNotAnError() {
+        assertNull(CliStatus.apiError(screen("""
+              ⎿  API Error (Request timed out.) · Retrying in 5 seconds… (attempt 2/10)
+            ✻ Pondering… (40s · esc to interrupt)
+        """)))
+    }
+
+    @Test fun errorFromAnEarlierTurnIsGone() {
+        assertNull(CliStatus.apiError(screen("""
+              ⎿  API Error: Connection error.
+            > try again
+            ⏺ Fixed it, the build passes.
+            >
+        """)))
+    }
+
+    @Test fun staleWaitingWithNothingAskedIsNotAsking() {
+        // An approval turned down: Claude stopped and shows its message, no menu, no hook.
+        val lines = screen("""
+            ⏺ Bash(rm -rf build)
+              ⎿  Interrupted · What should Claude do instead?
+        """)
+        assertTrue(!CliStatus.mayBeAsking(lines))
+        assertTrue(CliStatus.mayBeAsking(screen("""
+            Bash command
+              gradle assemble
+            Do you want to proceed?
+        """)))
+    }
 }
