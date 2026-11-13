@@ -819,11 +819,15 @@ tasks.register("copyBuildTools") {
                 }
             }
 
+            // Run from the library's folder with a relative --dir: aapt2 records each file's path as
+            // given in the .flat it writes, and these ship inside the app. An absolute path put the
+            // build machine's home folder (user name, folders) into every release APK.
             execOps.exec {
+                workingDir = resDir.parentFile
                 commandLine(
                     aapt2Exe.absolutePath,
                     "compile",
-                    "--dir", resDir.absolutePath,
+                    "--dir", resDir.name,
                     "-o", libOut.absolutePath,
                 )
             }
