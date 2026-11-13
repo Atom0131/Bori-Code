@@ -6,6 +6,8 @@ import com.bori.theme.components.crystalSegmentedButtonColors
 import com.bori.theme.components.isCrystal
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.systemGestureExclusion
@@ -359,24 +361,59 @@ private fun PaneHeader(
     }
 }
 
-/** The bar between Chat and the other pane: drag to resize (to an edge for full screen), double-tap to hide or bring back the chat. */
+/**
+ * The bar between Chat and the other pane: drag to resize (to an edge for full screen), double-tap to
+ * hide or bring back the chat. Under Crystal the bar itself is clear (the field shows through), so the
+ * split reads from a faint full-height glass seam and a solid grip: onSurface (white on dark glass,
+ * ink on light) with a thin surface rim, so it stands out over any part of the colour field. It was a
+ * 4 dp grey pill that disappeared into the glass. While dragged, the grip takes the theme's primary.
+ */
 @Composable
 private fun SplitDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Unit, onDoubleTap: () -> Unit) {
+    val crystal = isCrystal()
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val dragging by interaction.collectIsDraggedAsState()
+    val scheme = MaterialTheme.colorScheme
+    val gripColor by androidx.compose.animation.animateColorAsState(
+        when {
+            dragging -> scheme.primary
+            crystal -> scheme.onSurface.copy(alpha = 0.85f)
+            else -> scheme.onSurfaceVariant
+        },
+        label = "splitGrip",
+    )
+    val gripHeight by androidx.compose.animation.core.animateDpAsState(if (dragging) 88.dp else 64.dp, label = "splitGripHeight")
     Box(
         modifier = Modifier
-            .width(12.dp)
+            .width(16.dp)
             .fillMaxHeight()
-            // Under Crystal the field shows through; the grip alone marks the split.
-            .background(if (isCrystal()) Color.Transparent else MaterialTheme.colorScheme.surfaceContainerHigh)
-            .draggable(rememberDraggableState(onDrag), Orientation.Horizontal, onDragStopped = { onDragEnd() })
+            .background(if (crystal) Color.Transparent else scheme.surfaceContainerHigh)
+            .draggable(
+                rememberDraggableState(onDrag), Orientation.Horizontal,
+                interactionSource = interaction,
+                onDragStopped = { onDragEnd() },
+            )
             .pointerInput(Unit) { detectTapGestures(onDoubleTap = { onDoubleTap() }) },
         contentAlignment = Alignment.Center,
     ) {
+        if (crystal) {
+            // The seam: a hairline the height of the panes, like the edge where two panes of glass meet.
+            Box(
+                Modifier
+                    .width(1.dp)
+                    .fillMaxHeight()
+                    .background(scheme.onSurface.copy(alpha = 0.15f)),
+            )
+        }
         Box(
             Modifier
-                .width(4.dp)
-                .height(48.dp)
-                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), RoundedCornerShape(2.dp)),
+                .width(6.dp)
+                .height(gripHeight)
+                .then(
+                    if (crystal) Modifier.border(1.dp, scheme.surface.copy(alpha = 0.55f), RoundedCornerShape(3.dp))
+                    else Modifier,
+                )
+                .background(gripColor, RoundedCornerShape(3.dp)),
         )
     }
 }

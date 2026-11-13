@@ -18,7 +18,9 @@ Bori Code builds Android projects on-device without running Gradle. It reads the
 - Sources can be in src/main/java or src/main/kotlin; src/main/assets/ and src/main/jniLibs/<abi>/*.so are packaged. Multi-module projects work: list modules in settings.gradle(.kts) and depend on them with `implementation(project(":name"))`.
 - Manifest: `android:icon` / `android:roundIcon` may point at `@mipmap/...` only when that file exists in res/mipmap-*/, and `android:dataExtractionRules` / `android:fullBackupContent` only when the res/xml file exists. Library manifests (WorkManager, FileProvider, Startup…) are merged automatically.
 - Themes: framework themes (`android:Theme.Material.Light.NoActionBar`) always work. AppCompat (`Theme.AppCompat.*`) and Material Components / Material 3 themes need that library in the dependencies.
-- Release builds can be an APK or an Android App Bundle (.aab) for Google Play, signed with the keystore from Settings → Release Signing.
+- SDK levels: new projects use `compileSdk = 37` and `targetSdk = 37` (Android 17); Google Play needs targetSdk 36 or higher for new apps and updates. The phone compiles against Android 17's API (android-37), so APIs up to 37 are available; guard newer calls with `Build.VERSION.SDK_INT` checks for the app's minSdk.
+- Release builds can be an APK or an Android App Bundle (.aab) for Google Play, signed with the keystore from Settings → Release Signing (Bori Code can create one there).
+- After each successful build, the output is copied into the project where Gradle would put it: `app/build/outputs/apk/debug/app-debug.apk`, `app/build/outputs/apk/release/app-release.apk`, or `app/build/outputs/bundle/release/app-release.aab`. Use that file to attach a build to a GitHub release (e.g. `gh release create v1.0 app/build/outputs/apk/release/app-release.apk`); `build/` stays out of git.
 - Not supported on the phone: DataBinding, product flavors, NDK/CMake builds (prebuilt .so files in jniLibs are fine), unit tests and lint. Don't run Gradle.
 
 ## Known-working library versions

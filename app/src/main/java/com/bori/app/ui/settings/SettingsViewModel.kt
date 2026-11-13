@@ -370,6 +370,38 @@ class SettingsViewModel @Inject constructor(
             com.bori.core.ai.model.ModelCatalog.defaultCompletionModels
     }
 
+    /** Makes a new release key and fills the form with it (it's saved as the release key). */
+    fun createKeystore(name: String, password: String, owner: com.bori.core.build.steps.KeystoreCreator.Owner, done: (Result<java.io.File>) -> Unit) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.Default) { runCatching { keystoreRepository.create(name, password, owner) } }
+            result.onSuccess { file ->
+                val saved = keystoreRepository.get()
+                _uiState.update { it.copy(keystoreForm = KeystoreFormState(
+                    enabled = true, path = file.absolutePath, alias = saved?.keyAlias.orEmpty(),
+                    keystorePassword = password, keyPassword = password, verifyResult = "OK — new key \"${saved?.keyAlias}\" is the release key",
+                )) }
+            }
+            done(result)
+        }
+    }
+
+    /** A key file picked with Browse: copied into the app's own storage, where builds can read it. */
+    fun importKeystore(uri: android.net.Uri, displayName: String?) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { keystoreRepository.import(uri, displayName) } }
+            _uiState.update { st ->
+                st.copy(keystoreForm = result.fold(
+                    { st.keystoreForm.copy(enabled = true, path = it.absolutePath, verifyResult = "Copied ${it.name} into Bori Code. Fill in the alias and passwords, then Save.") },
+                    { st.keystoreForm.copy(verifyResult = "Error: couldn't copy the key file (${it.message})") },
+                ))
+            }
+        }
+    }
+
+    /** The release key's file when Bori Code keeps it (made or imported here), for Back up. */
+    fun ownedKeyFile(path: String): java.io.File? =
+        java.io.File(path).takeIf { it.isFile && it.parentFile?.canonicalPath == keystoreRepository.keysDir.canonicalPath }
+
     fun verifyKeystore() {
         val form = _uiState.value.keystoreForm
         viewModelScope.launch {

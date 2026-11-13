@@ -123,6 +123,9 @@ fun LinuxSetupScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text("${formatMb(freeBytes)} free on this device", style = MaterialTheme.typography.labelLarge)
+            com.bori.app.ui.common.LocalNetworkNotice(
+                "Linux programs need it to reach your PC or other machines (ssh, git, Tailscale). The internet works without it.",
+            )
 
             rows.forEach { row ->
                 val d = row.distro

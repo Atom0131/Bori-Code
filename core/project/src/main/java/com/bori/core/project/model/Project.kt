@@ -5,7 +5,7 @@ data class Project(
     val name: String,
     val packageName: String,
     val minSdk: Int,
-    val targetSdk: Int = 35,
+    val targetSdk: Int = 37,
     val rootPath: String,
     val template: ProjectTemplate,
     val createdAt: Long = System.currentTimeMillis(),

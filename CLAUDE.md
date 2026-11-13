@@ -15,8 +15,8 @@ on-device Gemma 4 E2B/E4B via LiteRT-LM).
   new app on devices and on Play). Data: `bori.db`, `bori_keyvault`, projects in `files/Bori`. Backups
   have the `BCBK` header; the old `MMBK` (Mimir) ones still import. The keystore alias inside
   `bori-code-release.jks` is still `mimir`. That's only a name in the key file.
-- versionName `4.5.1`, versionCode `14`
-- minSdk 26, targetSdk 35, compileSdk 37 (Android 8.0 → 15; compileSdk only makes newer APIs visible), JVM target 11
+- versionName `4.5.2`, versionCode `15`
+- minSdk 26, targetSdk 37, compileSdk 37 (Android 8.0 → 17), JVM target 11. Targeting 37 means: ACCESS_LOCAL_NETWORK for LAN/Tailscale (`ui/common/LocalNetworkAccess.kt`), predictive back (no onBackPressed), no orientation locks on large screens
 - ~160 Kotlin files across 6 Gradle modules. UI is 100% Jetpack Compose. DI is Hilt.
 
 ## Module map
@@ -67,7 +67,7 @@ On Linux, `gradle.properties` pins a Windows `org.gradle.java.home`, so override
 and use a JDK 21 (the build is tested on JDK 21):
 `./gradlew -Dorg.gradle.java.home=$JAVA_HOME :app:assembleDebug :app:bundleRelease`
 
-`copyBuildTools` is pinned to platform 35 + build-tools 37.0.0 and has declared
+`copyBuildTools` is pinned to platform 37.0 + build-tools 37.0.0 and has declared
 inputs/outputs, so normal builds report it UP-TO-DATE; it regenerates the bundled
 assets only when its inputs change.
 

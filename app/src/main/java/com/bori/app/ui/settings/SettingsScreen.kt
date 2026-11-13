@@ -519,6 +519,9 @@ fun SettingsScreen(
                 onKeyPasswordChanged = { viewModel.updateKeyPassword(it) },
                 onSave = { viewModel.saveKeystoreConfig() },
                 onVerify = { viewModel.verifyKeystore() },
+                onCreate = viewModel::createKeystore,
+                onImport = viewModel::importKeystore,
+                ownedKeyFile = viewModel::ownedKeyFile,
             )
             }
 
@@ -798,6 +801,9 @@ private fun AiConfigSection(
                 keyboardOptions = KeyboardOptions(keyboardType = if (isServerUrl) KeyboardType.Uri else KeyboardType.Password),
                 singleLine = true,
             )
+            if (isServerUrl) {
+                com.bori.app.ui.common.LocalNetworkNotice("A server on your PC (by Wi-Fi or Tailscale) needs this.")
+            }
             keyHints[selectedDisplayProvider]?.let { hint ->
                 Text(
                     text = hint,
@@ -1038,33 +1044,41 @@ private fun SigningSection(
     onKeyPasswordChanged: (String) -> Unit,
     onSave: () -> Unit,
     onVerify: () -> Unit,
+    onCreate: (String, String, com.bori.core.build.steps.KeystoreCreator.Owner, (Result<java.io.File>) -> Unit) -> Unit,
+    onImport: (android.net.Uri, String?) -> Unit,
+    ownedKeyFile: (String) -> java.io.File?,
 ) {
     val context = LocalContext.current
+    var showCreate by remember { mutableStateOf(false) }
+    // A picked document is only readable while the picker's grant lasts, and builds run in their own
+    // process: the key is copied into the app's storage (the old /proc/self/fd path was dead at once).
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri != null) {
-            val path = uri.path ?: return@rememberLauncherForActivityResult
-            // Resolve /document/primary:... → /sdcard/...
-            val resolved = if (path.startsWith("/document/primary:")) {
-                "/sdcard/" + path.removePrefix("/document/primary:")
-            } else {
-                // Try content resolver to get a real path via file descriptor
-                context.contentResolver.openFileDescriptor(uri, "r")?.use {
-                    "/proc/self/fd/${it.fd}"
-                } ?: path
-            }
-            onPathChanged(resolved)
+            val name = context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+            onImport(uri, name)
         }
+    }
+    if (showCreate) {
+        com.bori.app.ui.build.CreateSigningKeyDialog(onCreate = onCreate, onDismiss = { showCreate = false })
     }
 
     Text(
-        "By default every build is signed with an auto-generated debug key. " +
-            "Enable this to sign with your own release keystore (.bks, .jks, .p12).",
+        "Debug builds are signed with an automatic debug key. Release builds and Google Play bundles " +
+            "need your own key: create one here, or use a key file you have (.jks, .keystore, .p12, .bks).",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(bottom = 8.dp),
     )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 4.dp)) {
+        Button(onClick = { showCreate = true }) { Text("Create signing key") }
+        OutlinedButton(onClick = { filePicker.launch(arrayOf("*/*")) }) { Text("Use a key file") }
+    }
+    TextButton(onClick = {
+        context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(com.bori.app.ui.build.APP_SIGNING_HELP_URL)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    }) { Text("Learn more about signing keys") }
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -1137,6 +1151,9 @@ private fun SigningSection(
             Spacer(Modifier.width(8.dp))
             TextButton(onClick = onVerify, enabled = form.path.isNotBlank() && form.alias.isNotBlank()) {
                 Text("Verify")
+            }
+            ownedKeyFile(form.path)?.let { file ->
+                TextButton(onClick = { com.bori.app.ui.build.shareBuildOutput(context, file) }) { Text("Back up key") }
             }
         }
 

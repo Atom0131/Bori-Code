@@ -124,7 +124,7 @@ class ProjectRepository @Inject constructor(
                 name = File(dirPath).name,
                 packageName = detectNamespace(File(dirPath)) ?: "com.example.myapp",
                 minSdk = 26,
-                targetSdk = 34,
+                targetSdk = 37,
                 rootPath = dirPath,
                 template = ProjectTemplate.EMPTY_ACTIVITY.name,
                 createdAt = now,

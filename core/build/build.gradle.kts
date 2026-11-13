@@ -31,8 +31,9 @@ val execOps = objects.newInstance(InjectedExecOps::class.java).execOps
 
 // SDK versions the bundled tools come from. Pinned (not "latest installed") so every
 // machine produces the same assets; android {} below compiles against the same versions.
-// The committed assets came from platform 35 + build-tools 37.0.0 (D8 9.2.4).
-val pinnedCompileSdk = 35
+// The assets come from platform 37.0 (Android 17; its android.jar is still Java 8 class files, so the
+// bundled ECJ and Kotlin read it) + build-tools 37.0.0 (D8 9.2.4). Was 35 until 2026-11-12.
+val pinnedCompileSdk = "37.0"
 val pinnedBuildTools = "37.0.0"
 
 // Every file copyBuildTools writes into src/main/assets/.
