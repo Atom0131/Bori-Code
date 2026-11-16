@@ -127,8 +127,29 @@ object CliStatus {
     /** Strips a TUI box's side borders and padding from one screen line. */
     fun clean(line: String): String = line.trim().trim { it in BORDER_CHARS || it.isWhitespace() }
 
+    /**
+     * Antigravity's busy line names what it's doing ("Editing file...", "Writing MainActivity.kt…",
+     * "Searching the web..."), not one fixed word: any "-ing" phrase ending in an ellipsis on its own
+     * line, near the bottom. Only for Antigravity tabs: another CLI's output can end like that.
+     */
+    private val AGY_BUSY = Regex("^(?:[^\\p{L}\\p{N}\\s]{1,2}\\s*)?([A-Z][a-z]+ing\\b[^…]{0,100}?)\\s*(?:\\.\\.\\.|…)\\s*(?:\\(.*\\))?\\s*$")
+    private const val AGY_SCAN = 8
+
+    /** What Antigravity's screen says it's doing now ("Editing file..."), or null when it shows no busy line. */
+    fun agyActivity(lines: List<String>): String? {
+        val rows = lines.map(::clean).filter { it.isNotEmpty() }.takeLast(AGY_SCAN)
+        for (row in rows.reversed()) {
+            AGY_BUSY.find(row)?.let { m -> return m.groupValues[1].trim() + "…" }
+            if (BUSY.containsMatchIn(row)) {
+                return row.replace(Regex("\\(?\\s*esc to interrupt\\s*\\)?", RegexOption.IGNORE_CASE), "")
+                    .trim(' ', '·', '-', '(', ')').ifEmpty { null }
+            }
+        }
+        return null
+    }
+
     /** The status line in the bottom [lines] of the screen, or null when the CLI isn't working. */
-    fun parse(lines: List<String>): Status? {
+    fun parse(lines: List<String>, agy: Boolean = false): Status? {
         val rows = lines.map(::clean)
         for (i in rows.indices.reversed()) {
             val m = CLAUDE.find(rows[i]) ?: continue
@@ -142,6 +163,7 @@ object CliStatus {
                 ?.removePrefix("⎿")?.trim()?.ifEmpty { null }
             return Status(m.groupValues[1], detail, tip)
         }
+        if (agy) return agyActivity(lines)?.let { Status(it) }
         // Other CLIs: their busy line, as it reads.
         val busy = rows.lastOrNull { BUSY.containsMatchIn(it) } ?: return null
         val text = busy.replace(Regex("\\(?\\s*esc to interrupt\\s*\\)?", RegexOption.IGNORE_CASE), "").trim(' ', '·', '-', '(', ')')

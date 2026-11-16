@@ -50,6 +50,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -202,6 +206,13 @@ fun ChatScreen(
     var showCommandsSheet by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
+    // Auto-enter for the terminal tab Chat sends to, the History sheet and the stats switch.
+    val autoEnterTabs by viewModel.autoEnter.collectAsState()
+    val autoEnterExplained by viewModel.autoEnterExplained.collectAsState()
+    var explainAutoEnter by remember { mutableStateOf<Int?>(null) }
+    var showAutoEnterStats by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
+    val statsSettings by com.bori.app.stats.StatsPrefs.settings.collectAsState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val commandsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val modelSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -474,6 +485,48 @@ fun ChatScreen(
         }
     }
 
+    LaunchedEffect(Unit) { com.bori.app.stats.StatsPrefs.init(context) }
+    explainAutoEnter?.let { id ->
+        val totals = remember { viewModel.autoEnterTotals() }
+        BoriAlertDialog(
+            onDismissRequest = { explainAutoEnter = null },
+            title = { Text("Auto-enter") },
+            text = {
+                Text(
+                    "Bori presses Enter for you when the CLI in this tab asks to approve a step " +
+                        "(\"Do you want to proceed?\", [y/n], ❯ Yes). That approves every command and edit " +
+                        "it asks about, so only use it on work you trust. It never answers a question or a plan, " +
+                        "Linux's blocked commands stay blocked, and it turns itself off after 20 minutes " +
+                        "with nothing to approve.\n\nEnters so far: ${totals.today} today, ${totals.week} this week, ${totals.all} in all " +
+                        "(${com.bori.app.terminal.AutoEnterStats.timeSaved(totals.all)} saved).",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.markAutoEnterExplained()
+                    viewModel.setTerminalAutoEnter(id, true)
+                    explainAutoEnter = null
+                }) { Text("Turn on") }
+            },
+            dismissButton = { TextButton(onClick = { explainAutoEnter = null }) { Text("Cancel") } },
+        )
+    }
+    if (showAutoEnterStats) {
+        AutoEnterStatsDialog(
+            totals = remember(showAutoEnterStats) { viewModel.autoEnterTotals() },
+            onExport = { uri -> scope.launch { snackbarHostState.showSnackbar(viewModel.exportAutoEnterStats(uri)) } },
+            onImport = { uri -> scope.launch { snackbarHostState.showSnackbar(viewModel.importAutoEnterStats(uri)) } },
+            onDismiss = { showAutoEnterStats = false },
+        )
+    }
+    if (showHistory) {
+        HistorySheet(
+            viewModel = viewModel,
+            terminalAgent = terminalTarget?.agent,
+            onDismiss = { showHistory = false },
+        )
+    }
+
     if (showClearConfirmDialog) {
         BoriAlertDialog(
             onDismissRequest = { showClearConfirmDialog = false },
@@ -597,6 +650,34 @@ fun ChatScreen(
                                 onClick = {
                                     showOverflowMenu = false
                                     showClearConfirmDialog = true
+                                },
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("History") },
+                                leadingIcon = { Icon(Icons.Default.History, contentDescription = null) },
+                                onClick = { showOverflowMenu = false; showHistory = true },
+                            )
+                            if (terminalTarget == null) {
+                                DropdownMenuItem(
+                                    text = { Text("New conversation") },
+                                    leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                                    onClick = { showOverflowMenu = false; viewModel.newConversation() },
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Auto-enter history") },
+                                leadingIcon = { Icon(Icons.Default.SmartToy, contentDescription = null) },
+                                onClick = { showOverflowMenu = false; showAutoEnterStats = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Show stats overlay") },
+                                leadingIcon = { Icon(Icons.Default.Speed, contentDescription = null) },
+                                trailingIcon = { if (statsSettings.overlay) Icon(Icons.Default.Check, contentDescription = "On") },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    com.bori.app.stats.StatsPrefs.init(context)
+                                    com.bori.app.ui.settings.applyStatsSettings(context) { it.copy(overlay = !it.overlay) }
                                 },
                             )
                         }
@@ -897,6 +978,17 @@ fun ChatScreen(
                             input = ""
                         },
                         compact = tight,
+                        autoEnterCount = terminalTarget?.let { autoEnterTabs[it.tabId]?.enters },
+                        onAutoEnter = {
+                            terminalTarget?.tabId?.let { id ->
+                                when {
+                                    id in autoEnterTabs -> viewModel.setTerminalAutoEnter(id, false)
+                                    autoEnterExplained -> viewModel.setTerminalAutoEnter(id, true)
+                                    else -> explainAutoEnter = id
+                                }
+                            }
+                        },
+                        onAutoEnterStats = { showAutoEnterStats = true },
                     )
                 }
                 }
@@ -2159,6 +2251,10 @@ private fun TerminalTargetBar(
     onStart: (com.bori.app.terminal.TerminalBridge.Startable) -> Unit,
     /** Little room (keyboard up in landscape): the status goes into the chips' row, one line in all. */
     compact: Boolean = false,
+    /** Auto-enter's Enters in the chosen tab, or null while it's off there. */
+    autoEnterCount: Int? = null,
+    onAutoEnter: () -> Unit = {},
+    onAutoEnterStats: () -> Unit = {},
 ) {
     var startMenu by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
@@ -2168,7 +2264,7 @@ private fun TerminalTargetBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (compact && chosen != null) {
-                TargetStatusLine(chosen, live, onOpenTerminal, compact = true)
+                TargetStatusLine(chosen, live, onOpenTerminal, compact = true, autoEnterCount, onAutoEnter, onAutoEnterStats)
             }
             Text("Send to", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             FilterChip(colors = crystalFilterChipColors(), selected = chosen == null, onClick = { onChoose(null) }, label = { Text("Bori agent") })
@@ -2199,7 +2295,7 @@ private fun TerminalTargetBar(
                 }
             }
         }
-        if (chosen != null && !compact) TargetStatusLine(chosen, live, onOpenTerminal, compact = false)
+        if (chosen != null && !compact) TargetStatusLine(chosen, live, onOpenTerminal, compact = false, autoEnterCount, onAutoEnter, onAutoEnterStats)
     }
 }
 
@@ -2210,6 +2306,9 @@ private fun TargetStatusLine(
     live: com.bori.app.terminal.TerminalBridge.Live,
     onOpenTerminal: () -> Unit,
     compact: Boolean,
+    autoEnterCount: Int? = null,
+    onAutoEnter: () -> Unit = {},
+    onAutoEnterStats: () -> Unit = {},
 ) {
     val waiting = live.menu != null || live.waiting
     Row(verticalAlignment = Alignment.CenterVertically, modifier = if (compact) Modifier else Modifier.fillMaxWidth()) {
@@ -2226,10 +2325,20 @@ private fun TargetStatusLine(
                     .padding(horizontal = 10.dp, vertical = 4.dp),
             )
         }
+        // Antigravity keeps its input box on screen while it works and has no hooks: its transcript
+        // (TerminalSessionManager.pollAgy) decides, or the line flips between "working" and "your turn".
+        val fromTranscript = chosen.command == "antigravity"
+        val working = com.bori.app.service.StatusNotifier.AgentState.WORKING
         Text(
             when {
                 // The same words the terminal shows ("Flabbergasting…"), not a fixed "working".
                 waiting -> "${chosen.agent} is asking you. Answer below or in the terminal."
+                // The card above shows what it's doing, word for word as the terminal does.
+                fromTranscript && live.status != null -> "${chosen.agent} is working"
+                fromTranscript && live.error == null && chosen.state == working ->
+                    live.activity?.let { "${chosen.agent}: $it" } ?: "${chosen.agent} is working…"
+                fromTranscript && chosen.state == com.bori.app.service.StatusNotifier.AgentState.DONE ->
+                    "${chosen.agent} is done. Your turn."
                 live.status != null -> "${chosen.agent}: ${live.status.verb}"
                 live.error != null -> "${chosen.agent} hit an API error. Retry below, or send a message."
                 // The hooks can leave WORKING behind (an Esc interrupt fires none): the screen decides.
@@ -2244,7 +2353,46 @@ private fun TargetStatusLine(
             overflow = TextOverflow.Ellipsis,
             modifier = if (compact) Modifier.widthIn(max = 320.dp) else Modifier.weight(1f),
         )
+        AutoEnterChip(autoEnterCount, onAutoEnter, onAutoEnterStats)
         TextButton(onClick = onOpenTerminal) { Text(if (waiting) "Open terminal" else "Show terminal") }
+    }
+}
+
+/**
+ * The terminal's auto-enter bot, in Chat: lit with its count while it's on for the chosen tab. A tap
+ * turns it on or off; a long press shows its history.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun AutoEnterChip(count: Int?, onToggle: () -> Unit, onStats: () -> Unit) {
+    val on = count != null
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .padding(start = 4.dp)
+            .clip(RoundedCornerShape(50))
+            .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
+            .combinedClickable(
+                onClickLabel = if (on) "Turn auto-enter off" else "Turn auto-enter on",
+                onLongClickLabel = "Auto-enter history",
+                onClick = onToggle,
+                onLongClick = onStats,
+            )
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+        Icon(
+            Icons.Default.SmartToy,
+            contentDescription = if (on) "Auto-enter on" else "Auto-enter off",
+            tint = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
+        )
+        if (on) {
+            Text(
+                " auto-enter · $count",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onPrimary,
+            )
+        }
     }
 }
 
@@ -2641,5 +2789,132 @@ private fun CliMenuCard(
                 TextButton(onClick = onCancel) { Text(if (menu.canCancel) "Cancel (Esc)" else "Esc") }
             }
         }
+    }
+}
+
+/** Auto-enter's counts (the same as the terminal's), with the PC helper's export and import. */
+@Composable
+private fun AutoEnterStatsDialog(
+    totals: com.bori.app.terminal.AutoEnterStats.Totals,
+    onExport: (android.net.Uri) -> Unit,
+    onImport: (android.net.Uri) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val export = rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri?.let(onExport)
+    }
+    val import = rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(onImport)
+    }
+    BoriAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Auto-enter history") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(
+                    "Today" to totals.today,
+                    "This week" to totals.week,
+                    "This month" to totals.month,
+                    "This year" to totals.year,
+                    "All time" to totals.all,
+                ).forEach { (label, n) ->
+                    Row(Modifier.fillMaxWidth()) {
+                        Text(label, modifier = Modifier.weight(1f))
+                        Text("$n Enter${if (n == 1) "" else "s"}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                Text(
+                    "Time saved: ${com.bori.app.terminal.AutoEnterStats.timeSaved(totals.all)} " +
+                        "(about ${com.bori.app.terminal.AutoEnterStats.SECONDS_SAVED_PER_ENTER} s per Enter). " +
+                        "Turn it on or off with the bot next to Show terminal.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { export.launch("agy-stats-${java.time.LocalDate.now()}.json") }) { Text("Export stats") }
+                    TextButton(onClick = { import.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }) {
+                        Text("Import stats")
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
+}
+
+/**
+ * Earlier conversations: Bori agent's saved ones (tap to open one), or, when Chat sends to a coding
+ * CLI, that CLI's conversations in this project (it continues them itself, through its /resume).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HistorySheet(viewModel: ChatViewModel, terminalAgent: String?, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val sessions by viewModel.sessions.collectAsState()
+    var past by remember { mutableStateOf<List<com.bori.app.terminal.TerminalBridge.PastSession>?>(null) }
+    if (terminalAgent != null) LaunchedEffect(terminalAgent) { past = viewModel.pastTerminalSessions() }
+    val dateFormat = remember { java.text.SimpleDateFormat("MMM d, HH:mm", java.util.Locale.getDefault()) }
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp)) {
+            Text(
+                if (terminalAgent != null) "$terminalAgent history in this project" else "Bori agent history",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            if (terminalAgent != null) {
+                Text(
+                    "$terminalAgent keeps these itself. Continue one in the terminal: it opens $terminalAgent's own list.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+                )
+                TextButton(onClick = { viewModel.resumeInTerminal(); onDismiss() }) { Text("Continue one in the terminal (/resume)") }
+            }
+            LazyColumn(Modifier.heightIn(max = 480.dp)) {
+                if (terminalAgent != null) {
+                    val list = past
+                    when {
+                        list == null -> item { Text("Reading…", modifier = Modifier.padding(vertical = 12.dp)) }
+                        list.isEmpty() -> item { Text("No earlier conversations in this project.", modifier = Modifier.padding(vertical = 12.dp)) }
+                        else -> items(list.size) { i ->
+                            val p = list[i]
+                            HistoryRow(
+                                title = p.title,
+                                subtitle = dateFormat.format(java.util.Date(p.updatedAt)) + if (p.current) " · this tab" else "",
+                                onClick = null,
+                            )
+                        }
+                    }
+                } else {
+                    item {
+                        TextButton(onClick = { viewModel.newConversation(); onDismiss() }) { Text("New conversation") }
+                    }
+                    if (sessions.isEmpty()) item { Text("No saved conversations yet.", modifier = Modifier.padding(vertical = 12.dp)) }
+                    items(sessions.size) { i ->
+                        val sess = sessions[i]
+                        HistoryRow(
+                            title = sess.title.ifBlank { "New Chat" },
+                            subtitle = dateFormat.format(java.util.Date(sess.updatedAt)) +
+                                if (sess.id == viewModel.activeSession) " · open now" else "",
+                            onClick = { viewModel.openSession(sess.id); onDismiss() },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryRow(title: String, subtitle: String, onClick: (() -> Unit)?) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 8.dp, vertical = 10.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

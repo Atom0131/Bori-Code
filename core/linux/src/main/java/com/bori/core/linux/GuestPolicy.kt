@@ -318,6 +318,23 @@ class GuestPolicy @Inject constructor(
      * Antigravity's settings.json belongs to the user (the CLI writes it too), so only Bori Code's keys
      * are set and everything else is kept. An unreadable file is left alone rather than replaced.
      */
+    /**
+     * Puts Bori Code's sandbox setting back if Antigravity dropped it. Antigravity 1.5.8 saves its
+     * settings with `omitempty`, so `"enableTerminalSandbox": false` vanishes whenever it rewrites the
+     * file (trusting a folder, say) and the sandbox, which can't run under proot, comes back on:
+     * every command then fails once with "fork/exec … operation not permitted" and is retried with
+     * BypassSandbox. The workspace allow rules ([WORKSPACE_ALLOW]) are put back the same way.
+     * Returns true when it wrote the file. Cheap: one small read when nothing changed.
+     */
+    fun keepAntigravitySettings(distroId: String): Boolean {
+        val file = File(proot.rootfs(distroId), "root/.gemini/antigravity-cli/settings.json")
+        if (!file.isFile) return false
+        val settings = runCatching { JSONObject(file.readText().ifBlank { "{}" }) }.getOrNull() ?: return false
+        if (!applyBoriAgySettings(settings)) return false
+        file.writeText(settings.toPrettyJson())
+        return true
+    }
+
     private fun mergeAntigravitySettings(rootfs: File) {
         val file = File(rootfs, "root/.gemini/antigravity-cli/settings.json")
         val settings = if (file.exists()) {
@@ -330,6 +347,7 @@ class GuestPolicy @Inject constructor(
         // apps don't get. Under proot it doesn't fall back cleanly; it blocked even an approved
         // read-only `find` (emulator, 2026-10-25). Its permission prompts are the gate instead.
         settings.put("enableTerminalSandbox", false)
+        applyBoriAgySettings(settings)
         // Keep the user's other trusted folders, minus ones under the pre-rename /root/projects mount.
         val old = settings.optJSONArray("trustedWorkspaces") ?: JSONArray()
         val trusted = JSONArray()
@@ -576,6 +594,33 @@ class GuestPolicy @Inject constructor(
          * all of them; Fold, 2026-11-13). Only the files that would loosen its own rules or expose its
          * login are denied in there.
          */
+        /** Whether Antigravity's [settings] lack Bori Code's `"enableTerminalSandbox": false`. */
+        fun sandboxOffMissing(settings: JSONObject): Boolean =
+            !(settings.has("enableTerminalSandbox") && !settings.optBoolean("enableTerminalSandbox", true))
+
+        /**
+         * File edits in the projects folder run without a prompt. Each one otherwise went through
+         * Antigravity's safety check, an extra model call and a confirmation that auto-enter (or the
+         * user) answered: about 1.5 s per edit, 600 times in one afternoon (Fold, 2026-11-13). Rules
+         * match by path prefix; commands still ask, and the deny rules still win.
+         */
+        val WORKSPACE_ALLOW = listOf(
+            "write_file(${ProotLauncher.GUEST_WORKSPACE}/)",
+            "edit_file(${ProotLauncher.GUEST_WORKSPACE}/)",
+        )
+
+        /** Puts the sandbox switch and [WORKSPACE_ALLOW] into [settings]; true if anything changed. */
+        fun applyBoriAgySettings(settings: JSONObject): Boolean {
+            var changed = false
+            if (sandboxOffMissing(settings)) { settings.put("enableTerminalSandbox", false); changed = true }
+            val permissions = settings.optJSONObject("permissions") ?: JSONObject().also { settings.put("permissions", it) }
+            val allow = permissions.optJSONArray("allow") ?: JSONArray().also { permissions.put("allow", it) }
+            for (rule in WORKSPACE_ALLOW) {
+                if ((0 until allow.length()).none { allow.optString(it) == rule }) { allow.put(rule); changed = true }
+            }
+            return changed
+        }
+
         fun claudeDenyRules(): List<String> = buildList {
             listOf("bin", "etc", "home", "lib", "media", "mnt", "opt", "run", "sbin", "srv", "usr", "var")
                 .forEach { add("Edit(//$it/**)") }

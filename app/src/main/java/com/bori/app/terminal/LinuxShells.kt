@@ -28,6 +28,9 @@ interface LinuxShells {
      */
     fun setAgentStateListener(listener: (tabId: Int, state: String, json: String) -> Unit)
 
+    /** Puts back settings a running agent dropped (Antigravity's sandbox switch); true when it fixed one. */
+    fun keepAgentSettings(distroId: String): Boolean = false
+
     /** Where the phone's heat and battery go for the guest's `bori-device`; null without Linux. */
     fun deviceStatusFile(): File? = null
 }

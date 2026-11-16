@@ -134,6 +134,10 @@ class ProotLauncher @Inject constructor(
             addAll(listOf("-b", "/dev", "-b", "/proc", "-b", "/sys"))
             addAll(listOf("-b", "${rootfs.absolutePath}/tmp:/dev/shm"))
             addAll(listOf("-b", "${handoffDir.apply { mkdirs() }.absolutePath}:$GUEST_HANDOFF"))
+            // Android doesn't let apps make user namespaces, but it also hides this file from them,
+            // so CLIs that check it (Antigravity 1.5.8's terminal sandbox) assume they can, then
+            // every sandboxed command fails with "operation not permitted". Say so truthfully.
+            noUserNamespacesFile()?.let { addAll(listOf("-b", "${it.absolutePath}:$GUEST_MAX_USER_NS")) }
             binds.forEach { (host, guest) ->
                 if (File(host).exists()) addAll(listOf("-b", "$host:$guest"))
             }
@@ -151,6 +155,13 @@ class ProotLauncher @Inject constructor(
         )
         return HostCommand(proot, argv, env, linuxDir.absolutePath)
     }
+
+    /** A file that reads "0", standing in for the guest's /proc/sys/user/max_user_namespaces. */
+    private fun noUserNamespacesFile(): File? = runCatching {
+        File(linuxDir, "proc-fakes/max_user_namespaces").apply {
+            if (!isFile || readText() != "0\n") { parentFile?.mkdirs(); writeText("0\n") }
+        }
+    }.getOrNull()
 
     private fun defaultGuestEnv(rootfs: File): Map<String, String> = linkedMapOf(
         "HOME" to GUEST_HOME,
@@ -201,6 +212,8 @@ class ProotLauncher @Inject constructor(
 
         /** Private drop box shared with Bori Code (browser handoff); not part of the workspace. */
         const val GUEST_HANDOFF = "/run/bori"
+        /** Where the guest reads whether it may make user namespaces (it may not, on Android). */
+        const val GUEST_MAX_USER_NS = "/proc/sys/user/max_user_namespaces"
 
         /** In [handoffDir]: the phone's heat and battery, written by Bori Code for `bori-device`. */
         const val DEVICE_FILE = "device"

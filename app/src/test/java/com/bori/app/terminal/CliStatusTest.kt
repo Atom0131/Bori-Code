@@ -271,4 +271,22 @@ class CliStatusTest {
             Do you want to proceed?
         """)))
     }
+
+    @Test
+    fun agyBusyLineNamesWhatItDoes() {
+        // Antigravity keeps its input box under the busy line.
+        val screen = listOf(
+            "● I'll add the bookmark on fold close.",
+            "  Editing app/src/main/java/ReaderActivity.kt... (esc to interrupt)",
+            "╭──────────────────────────╮",
+            "│ >                        │",
+            "╰──────────────────────────╯",
+        )
+        assertEquals("Editing app/src/main/java/ReaderActivity.kt…", CliStatus.agyActivity(screen))
+        assertEquals("Editing app/src/main/java/ReaderActivity.kt…", CliStatus.parse(screen, agy = true)?.verb)
+        assertEquals("Running command…", CliStatus.agyActivity(listOf("⠋ Running command... (esc to interrupt)", "> ")))
+        // Only for Antigravity: another CLI's output line isn't a status.
+        assertNull(CliStatus.parse(listOf("Downloading gradle…", "$ ")))
+        assertNull(CliStatus.agyActivity(listOf("● Done. Your build is ready.", "> ")))
+    }
 }

@@ -1,5 +1,6 @@
 package com.bori.core.linux
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -50,5 +51,24 @@ class GuestPolicyRulesTest {
         assertTrue(denies("Edit", "/root/.bashrc"))
         assertTrue(denies("Edit", "/usr/local/bin/bori-status"))
         assertTrue(denies("Edit", "/etc/claude-code/managed-settings.json"))
+    }
+
+    @Test fun agySandboxSwitchIsPutBackWhenDropped() {
+        // Antigravity 1.5.8 saves with omitempty: our `false` vanishes and the sandbox comes back.
+        assertTrue(GuestPolicy.sandboxOffMissing(org.json.JSONObject("""{"model":"x","trustedWorkspaces":["/root/workspace"]}""")))
+        assertTrue(GuestPolicy.sandboxOffMissing(org.json.JSONObject("""{"enableTerminalSandbox":true}""")))
+        assertFalse(GuestPolicy.sandboxOffMissing(org.json.JSONObject("""{"enableTerminalSandbox":false}""")))
+    }
+
+    @Test fun agyWorkspaceEditsAreAllowedAndOtherSettingsKept() {
+        val s = org.json.JSONObject("""{"model":"x","permissions":{"deny":["read_file(/root/.claude)"],"allow":["command(git status)"]}}""")
+        assertTrue(GuestPolicy.applyBoriAgySettings(s))
+        assertEquals("x", s.getString("model"))
+        assertFalse(s.getBoolean("enableTerminalSandbox"))
+        val allow = s.getJSONObject("permissions").getJSONArray("allow").let { a -> (0 until a.length()).map { a.getString(it) } }
+        assertEquals(listOf("command(git status)") + GuestPolicy.WORKSPACE_ALLOW, allow)
+        assertEquals(1, s.getJSONObject("permissions").getJSONArray("deny").length())
+        // Already there: nothing to write.
+        assertFalse(GuestPolicy.applyBoriAgySettings(s))
     }
 }

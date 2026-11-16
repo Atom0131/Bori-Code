@@ -71,7 +71,7 @@ object AgentFiles {
     }
 
     /** Puts the latest on-device build result in handoff.md, replacing the previous one. */
-    fun appendBuildResult(root: File, ok: Boolean, summary: String, tookMs: Long? = null) {
+    fun appendBuildResult(root: File, ok: Boolean, summary: String, tookMs: Long? = null, errors: List<String> = emptyList()) {
         val existing = readHandoff(root).orEmpty()
         val start = existing.indexOf(BUILD_HEADING)
         val kept = if (start < 0) existing else {
@@ -85,10 +85,38 @@ object AgentFiles {
             // Agents quote it when they ask the user to build: a build on the phone takes minutes.
             if (tookMs != null && tookMs > 0) append("Took: ").append(formatDuration(tookMs)).append('\n')
             if (summary.isNotBlank()) append(summary.trim()).append('\n')
+            // The errors themselves, so an agent can fix them without the user pasting the log.
+            if (!ok && errors.isNotEmpty()) {
+                append("Errors:\n```\n")
+                errors.forEach { append(it).append('\n') }
+                append("```\n")
+            }
         }
         val base = kept.trimEnd()
         writeHandoff(root, if (base.isEmpty()) section else "$base\n\n$section")
     }
+
+    /**
+     * The lines of a failed build's log that say what went wrong (compiler errors, the step that
+     * failed, an exception's causes), at most [max], with [root]'s path cut so they read as
+     * project-relative paths.
+     */
+    fun errorLines(logs: List<String>, root: String, max: Int = 15): List<String> {
+        val prefixes = listOfNotNull(
+            root.trimEnd('/').takeIf { it.isNotEmpty() }?.let { "$it/" },
+            root.trimEnd('/').trimStart('/').takeIf { it.isNotEmpty() }?.let { "$it/" },
+        )
+        return logs.asSequence()
+            .flatMap { it.lineSequence() }
+            .map { it.trimEnd() }
+            .filter { line -> ERROR_LINE.containsMatchIn(line) && !line.contains("warning", ignoreCase = true) }
+            .map { line -> prefixes.fold(line) { acc, p -> acc.replace(p, "") }.trimStart('/').take(400) }
+            .distinct()
+            .take(max)
+            .toList()
+    }
+
+    private val ERROR_LINE = Regex("""(?i)(\berror\b|^e: |^✗|failed|^Caused by:|Exception\b|^\s*\^\s*$)""")
 
     /** "45 s", "3 min 12 s", "1 h 5 min". */
     fun formatDuration(ms: Long): String {

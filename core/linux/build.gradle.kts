@@ -31,4 +31,6 @@ dependencies {
     ksp(libs.hilt.compiler)
 
     testImplementation(libs.junit)
+    // The real org.json for JVM unit tests (android.jar only has stubs that throw).
+    testImplementation("org.json:json:20240303")
 }

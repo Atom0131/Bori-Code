@@ -59,4 +59,30 @@ class TerminalBridgeTranscriptTest {
         assertTrue(m[0].content.endsWith("… (more in the terminal)"))
         assertTrue("line 13" !in m[0].content)
     }
+
+    private fun readAgy(vararg lines: String) =
+        TerminalBridge.Follower().read(tmp.newFile("transcript.jsonl").apply { writeText(lines.joinToString("\n") + "\n") })!!
+
+    // Step shapes as Antigravity 1.5.8 writes them (2026-11-13), with a generic project.
+    @Test fun agyResultsGoUnderTheirCalls() {
+        val m = readAgy(
+            """{"type":"USER_INPUT","content":"<USER_REQUEST>\nfix the build\n</USER_REQUEST>"}""",
+            """{"type":"PLANNER_RESPONSE","step_index":5,"content":"","tool_calls":[{"name":"edit_file","args":{"Path":"\"/root/workspace/My App/app/build.gradle.kts\"","Replacement":"\"x\""}},{"name":"run_command","args":{"CommandLine":"\"git status\""}}]}""",
+            """{"type":"GENERIC","status":"DONE","content":"Created At: 2026-11-13T13:27:24-06:00\nCompleted At: 2026-11-13T13:27:26-06:00\nMade 1 replacement in /root/workspace/My App/app/build.gradle.kts starting at line 47 (+4/-4 lines)."}""",
+            """{"type":"GENERIC","status":"ERROR","error":"fork/exec: operation not permitted","content":"Created At: 2026-11-13T13:01:55-06:00\nCompleted At: 2026-11-13T13:01:57-06:00\n"}""",
+            """{"type":"PLANNER_RESPONSE","content":"Updated [build.gradle.kts](file:///root/workspace/My%20App/app/build.gradle.kts#L46-L50).","tool_calls":[]}""",
+        )
+        assertEquals(listOf("user", "tool_result", "tool_result", "assistant"), m.map { it.role })
+        assertEquals("fix the build", m[0].content)
+        assertEquals("[edit_file] app/build.gradle.kts\nMade 1 replacement in app/build.gradle.kts starting at line 47 (+4/-4 lines).", m[1].content)
+        assertEquals("⚠ [run_command] git status\nfork/exec: operation not permitted", m[2].content)
+        assertEquals("Updated `app/build.gradle.kts`.", m[3].content)
+    }
+
+    @Test fun agyCallWithoutResultYetStillShows() {
+        val m = readAgy(
+            """{"type":"PLANNER_RESPONSE","content":"","tool_calls":[{"name":"write_file","args":{"TargetFile":"\"/root/workspace/p/a.kt\""}}]}""",
+        )
+        assertEquals("[write_file] a.kt", m.single().content)
+    }
 }

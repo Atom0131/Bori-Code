@@ -211,25 +211,103 @@ class TerminalSessionManager @Inject constructor(
         }
     }
 
-    /** Antigravity has no hooks: its transcript says whether it's working, waiting or done. */
+    private val _agentActivity = MutableStateFlow<Map<Int, String>>(emptyMap())
+    /** What a transcript-read agent (Antigravity) is running now, by tab: "write_file · app/Main.kt". */
+    val agentActivity: StateFlow<Map<Int, String>> = _agentActivity.asStateFlow()
+
+    /** When Chat last sent each agy tab a message: a "done" from before it is the previous turn's. */
+    private val agySentAt = HashMap<Int, Long>()
+    /** Since when each agy tab's transcript has read as finished, for [AGY_DONE_SETTLE_MS]. */
+    private val agyDoneSince = HashMap<Int, Long>()
+    private var agySettingsCheckedAt = 0L
+    /** Each agy tab's last read turn, with its transcript's mtime, so an unchanged file isn't re-read. */
+    private val agyTurns = HashMap<Int, Pair<Long, AgyTranscript.Turn>>()
+
+    /** Chat typed a message into tab [tabId]: an Antigravity tab is working from now, until its transcript says otherwise. */
+    fun onMessageSent(tabId: Int) {
+        val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return
+        if (tab.command != "antigravity") return
+        agySentAt[tabId] = System.currentTimeMillis()
+        agyDoneSince.remove(tabId)
+        agyChecked.remove(tabId)
+        setAgentState(tabId, AgentState.WORKING, null)
+        ensureTicking()
+    }
+
+    /**
+     * Antigravity has no hooks: its transcript says whether it's working, waiting or done. Agy writes a
+     * step only once it has finished, and keeps its input box on screen while it works, so:
+     * - a tool call without its result is running (WORKING, shown as [agentActivity]) unless the
+     *   screen shows an approval menu (WAITING);
+     * - DONE only after the final reply has stood for [AGY_DONE_SETTLE_MS] and is newer than the last
+     *   message Chat sent, so a step boundary or the previous turn's reply doesn't read as "your turn".
+     */
     private fun pollAgy() {
-        for (tab in _tabs.value) {
-            if (tab.command != "antigravity" || tab.finished) continue
-            val home = (tab.kind as? ShellKind.Linux)?.distroId?.let(linux::guestHome) ?: continue
-            val file = AgyTranscript.latest(home) ?: continue
-            val modified = file.lastModified()
-            if (agyChecked[tab.id] == modified) continue
-            agyChecked[tab.id] = modified
-            if (System.currentTimeMillis() - modified > AgyTranscript.MAX_AGE_MS) continue
-            val turn = AgyTranscript.read(file) ?: continue
-            val state = when {
-                turn.pending != null || turn.asksUser -> AgentState.WAITING
-                turn.complete -> AgentState.DONE
-                else -> AgentState.WORKING
+        val now = System.currentTimeMillis()
+        val agyTabs = _tabs.value.filter { it.command == "antigravity" && !it.finished }
+        if (agyTabs.isNotEmpty() && now - agySettingsCheckedAt >= AGY_SETTINGS_CHECK_MS) {
+            agySettingsCheckedAt = now
+            agyTabs.mapNotNull { (it.kind as? ShellKind.Linux)?.distroId }.distinct().forEach { distro ->
+                if (runCatching { linux.keepAgentSettings(distro) }.getOrDefault(false)) {
+                    Log.i(TAG, "Antigravity dropped enableTerminalSandbox=false; put it back")
+                }
             }
-            setAgentState(tab.id, state, turn.pending?.let { "Approve ${it.name}?" } ?: if (turn.asksUser) "It has a question for you" else null)
+        }
+        for (tab in agyTabs) {
+            val home = (tab.kind as? ShellKind.Linux)?.distroId?.let(linux::guestHome) ?: continue
+            val file = agyTranscript(tab.id, home) ?: continue
+            val modified = file.lastModified()
+            val cached = agyTurns[tab.id]
+            // Antigravity writes a step only once the model has finished it: while it streams a long
+            // edit, the screen ("Editing file...") is ahead of the transcript. The screen wins.
+            val screen = bottomLines(tab.id, AGY_SCAN_LINES)
+            val screenBusy = screen?.takeIf { CliStatus.menu(it) == null }?.let(CliStatus::agyActivity)
+            val shown = _agentActivity.value[tab.id]
+            val turn = if (cached != null && cached.first == modified) {
+                // Unchanged and settled with nothing running: nothing to look at again.
+                if (cached.second.pending == null && agyDoneSince[tab.id].let { it == null || now - it >= AGY_DONE_SETTLE_MS } &&
+                    agyChecked[tab.id] == modified && screenBusy == null && shown == null) continue
+                cached.second
+            } else {
+                if (now - modified > AgyTranscript.MAX_AGE_MS) { agyChecked[tab.id] = modified; continue }
+                (AgyTranscript.read(file) ?: run { agyChecked[tab.id] = modified; null } ?: continue)
+                    .also { agyTurns[tab.id] = modified to it }
+            }
+            val pending = turn.pending
+            // A tool call without its result is running, unless an approval is on screen (drawn a
+            // moment after the step, so looked for again each tick while the call is out).
+            val asking = pending != null && screen?.let {
+                CliStatus.menu(it) != null || AutoEnter.showsApproval(it)
+            } == true
+            // A finished reply while the screen still says it's busy: the next step is being written.
+            val complete = turn.complete && screenBusy == null
+            if (complete && !turn.asksUser) {
+                // A reply older than the message just sent is the last turn's: still working.
+                if (modified < (agySentAt[tab.id] ?: 0L)) { agyChecked[tab.id] = modified; continue }
+                val since = agyDoneSince.getOrPut(tab.id) { now }
+                if (now - since < AGY_DONE_SETTLE_MS) continue
+            } else {
+                agyDoneSince.remove(tab.id)
+            }
+            agyChecked[tab.id] = modified
+            _agentActivity.update { m ->
+                val doing = if (asking) null
+                    else screenBusy ?: pending?.let { p -> listOfNotNull(p.name, p.detail).joinToString(" · ") }
+                if (doing != null) m + (tab.id to doing) else m - tab.id
+            }
+            val (state, detail) = when {
+                asking -> AgentState.WAITING to "Approve ${pending!!.name}?"
+                turn.asksUser && screenBusy == null -> AgentState.WAITING to "It has a question for you"
+                complete -> AgentState.DONE to null
+                else -> AgentState.WORKING to null
+            }
+            setAgentState(tab.id, state, detail)
         }
     }
+
+    /** Tab [tabId]'s own agy conversation: the newest transcript written since the tab opened. */
+    private fun agyTranscript(tabId: Int, home: File): File? =
+        AgyTranscript.latest(home, since = (openedAt[tabId] ?: 0L) - TRANSCRIPT_SLACK_MS)
 
     /** Puts the agents and tabs in the status notification. */
     private fun publish() {
@@ -427,7 +505,7 @@ class TerminalSessionManager @Inject constructor(
     fun transcriptFile(tabId: Int): File? {
         val tab = _tabs.value.firstOrNull { it.id == tabId } ?: return null
         val home = (tab.kind as? ShellKind.Linux)?.distroId?.let(linux::guestHome) ?: return null
-        if (tab.command == "antigravity") return AgyTranscript.latest(home)
+        if (tab.command == "antigravity") return agyTranscript(tabId, home)
         val guest = claudeTranscripts[tabId] ?: return newestClaudeTranscript(tabId, home)
         if (!guest.startsWith("/root/") || ".." in guest) return null
         return File(home, guest.removePrefix("/root/"))
@@ -567,6 +645,10 @@ class TerminalSessionManager @Inject constructor(
         }
         agentStates.remove(id)
         agyChecked.remove(id)
+        agySentAt.remove(id)
+        agyDoneSince.remove(id)
+        agyTurns.remove(id)
+        _agentActivity.update { it - id }
         claudeTranscripts.remove(id)
         openedAt.remove(id)
         lastOutput.remove(tab.session)
@@ -584,6 +666,10 @@ class TerminalSessionManager @Inject constructor(
         _layout.update { it.copy(slots = List(it.split.panes) { null }, focused = 0) }
         agentStates.clear()
         agyChecked.clear()
+        agySentAt.clear()
+        agyDoneSince.clear()
+        agyTurns.clear()
+        _agentActivity.value = emptyMap()
         claudeTranscripts.clear()
         openedAt.clear()
         lastOutput.clear()
@@ -678,6 +764,11 @@ class TerminalSessionManager @Inject constructor(
         const val SCREEN_MAX_LINES = 300
         const val TRANSCRIPT_ROWS = 4000
         const val TICK_MS = 1_000L
+        /** How long agy's final reply must stand before Chat says "your turn". */
+        const val AGY_DONE_SETTLE_MS = 2_000L
+        /** How often agy's settings.json is checked for the sandbox switch it drops. */
+        const val AGY_SETTINGS_CHECK_MS = 5_000L
+        const val AGY_SCAN_LINES = 40
         const val SETTLE_MS = 300L
         const val WAKE_QUIET_MS = 15 * 60_000L
         const val WAKE_CHECK_MS = 60_000L

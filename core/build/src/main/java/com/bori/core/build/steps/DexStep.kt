@@ -5,7 +5,7 @@ import com.bori.core.build.tools.ToolsManager
 import dalvik.system.PathClassLoader
 import java.io.File
 import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
@@ -30,6 +30,7 @@ class DexStep(private val tools: ToolsManager) {
         variant: BuildVariant = BuildVariant.DEBUG,
         proguardRulesFiles: List<File> = emptyList(),
         desugaredLibConfig: File? = null,
+        threads: Int? = null,
     ) {
         val programFiles = inputs.filter { it.exists() }.flatMap { input ->
             if (input.isDirectory) input.walkTopDown().filter { it.isFile && it.extension == "class" }.toList()
@@ -53,6 +54,7 @@ class DexStep(private val tools: ToolsManager) {
                 add("--min-api"); add(minSdk.toString())
                 add(if (variant == BuildVariant.RELEASE) "--release" else "--debug")
                 add("--lib"); add(tools.androidStubs.absolutePath)
+                threads?.let { add("--thread-count"); add(it.toString()) }
                 // java.time & co. below their API level go through desugar_jdk_libs (dexed by [l8]).
                 desugaredLibConfig?.takeIf { it.exists() }?.let { add("--desugared-lib"); add(it.absolutePath) }
                 // Classpath, not library, for R8 too: those classes are desugared like the
@@ -71,7 +73,7 @@ class DexStep(private val tools: ToolsManager) {
                 }
                 addAll(programFiles)
             }.toTypedArray()
-        run(if (useR8) "com.android.tools.r8.R8" else "com.android.tools.r8.D8", toolName, args, emit)
+        run(if (useR8) "com.android.tools.r8.R8" else "com.android.tools.r8.D8", toolName, args, emit, inputs.joinToString { it.name })
     }
 
     /**
@@ -93,7 +95,11 @@ class DexStep(private val tools: ToolsManager) {
         run("com.android.tools.r8.L8", "L8", args, emit)
     }
 
-    private fun run(entryClass: String, toolName: String, args: Array<String>, emit: (String) -> Unit) {
+    /** D8, R8 or L8 ran out of the app's heap: not an error in the project's code. */
+    class OutOfMemory(message: String, cause: Throwable) : RuntimeException(message, cause)
+
+    private fun run(entryClass: String, toolName: String, args: Array<String>, emit: (String) -> Unit, what: String = "") {
+        waitForAbandoned(toolName, emit)
         try {
             val loader = PathClassLoader(tools.d8Jar.absolutePath, ClassLoader.getSystemClassLoader())
             val toolClass = loader.loadClass(entryClass)
@@ -114,38 +120,73 @@ class DexStep(private val tools: ToolsManager) {
             System.setErr(java.io.PrintStream(captured, true))
             val future = executor.submit<Unit> { runMethod.invoke(null, command) }
 
+            // A big project only needs time; a stuck or starved D8 needs stopping. So it stops when it
+            // makes no CPU progress for a while, when the heap stays full (it would only crawl), or
+            // at a hard cap, not at a fixed wall that large projects hit while still working.
             val startMs = System.currentTimeMillis()
-            val heartbeatEx = Executors.newSingleThreadScheduledExecutor()
-            val heartbeat: ScheduledFuture<*> = heartbeatEx.scheduleAtFixedRate({
-                val elapsed = (System.currentTimeMillis() - startMs) / 1000
-                emit("$toolName: still converting... ${elapsed}s / ${DEX_TIMEOUT_SECONDS}s")
-            }, 10, 10, TimeUnit.SECONDS)
-
+            var lastCpu = android.os.Process.getElapsedCpuTime()
+            var idleSince = startMs
+            var fullSince: Long? = null
             try {
-                future.get(DEX_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            } catch (e: TimeoutException) {
-                future.cancel(true)
-                throw RuntimeException("$toolName timed out after ${DEX_TIMEOUT_SECONDS}s — the project may be too large for on-device dexing.")
+                while (true) {
+                    try {
+                        future.get(HEARTBEAT_SECONDS, TimeUnit.SECONDS)
+                        break
+                    } catch (_: TimeoutException) {
+                        val now = System.currentTimeMillis()
+                        val elapsed = (now - startMs) / 1000
+                        val cpu = android.os.Process.getElapsedCpuTime()
+                        if (cpu - lastCpu >= MIN_CPU_MS_PER_BEAT) idleSince = now
+                        lastCpu = cpu
+                        val rt = Runtime.getRuntime()
+                        val used = rt.totalMemory() - rt.freeMemory()
+                        fullSince = if (used > rt.maxMemory() * HEAP_FULL_FRACTION) fullSince ?: now else null
+                        val stopWhy = when {
+                            elapsed >= DEX_MAX_SECONDS -> "took over ${DEX_MAX_SECONDS / 60} minutes"
+                            now - idleSince >= DEX_STALL_SECONDS * 1000 -> "made no progress for ${DEX_STALL_SECONDS}s"
+                            fullSince != null && now - fullSince!! >= HEAP_FULL_SECONDS * 1000 ->
+                                "ran with the memory full for ${HEAP_FULL_SECONDS}s"
+                            else -> null
+                        }
+                        if (stopWhy != null) {
+                            future.cancel(true)
+                            // cancel() can't stop D8's threads: remember it, so the next build waits
+                            // for it instead of starting with its memory still taken.
+                            abandoned = future
+                            val maxMb = rt.maxMemory() / (1024 * 1024)
+                            throw RuntimeException(
+                                "$toolName stopped: it $stopWhy${if (what.isNotEmpty()) " on $what" else ""}. Not an error in the " +
+                                    "code: Bori Code had ${(rt.maxMemory() - used) / (1024 * 1024)} of $maxMb MB free. Close and " +
+                                    "reopen Bori Code, then build again.",
+                            )
+                        }
+                        emit("$toolName: still converting... ${elapsed}s")
+                    }
+                }
             } finally {
-                heartbeat.cancel(false)
-                heartbeatEx.shutdownNow()
                 executor.shutdownNow()
                 System.setErr(originalErr)
                 // Stack frames and repeats (one Kotlin-metadata warning per class) only bury the message.
-                captured.toString().lines()
-                    .filter { it.isNotBlank() && !it.trimStart().startsWith("at ") }
-                    .distinct()
+                tidyToolOutput(captured.toString().lines())
                     .take(MAX_TOOL_LINES)
                     .forEach { emit("$toolName: $it") }
             }
         } catch (e: ClassNotFoundException) {
             throw RuntimeException("$toolName class not found in d8.jar — verify the bundled asset is correct", e)
-        } catch (e: RuntimeException) {
-            throw e
         } catch (e: Throwable) {
+            // D8 wraps an OutOfMemoryError (ExecutionException → CompilationFailedException →
+            // suppressed → …), so it read as "see the errors above" and agents hunted for code errors.
+            if (e !is OutOfMemory && findOutOfMemory(e)) {
+                val maxMb = Runtime.getRuntime().maxMemory() / (1024 * 1024)
+                throw OutOfMemory(
+                    "$toolName ran out of memory${if (what.isNotEmpty()) " on $what" else ""} (this phone gives " +
+                        "Bori Code $maxMb MB). Not an error in the code: build again, or close other apps first.",
+                    e,
+                )
+            }
+            if (e is RuntimeException) throw e
             val root = (e as? java.util.concurrent.ExecutionException)?.cause?.let { (it as? java.lang.reflect.InvocationTargetException)?.targetException ?: it } ?: e
             val message = when {
-                root is OutOfMemoryError -> "$toolName: Out of Memory. The project is too large for on-device dexing."
                 root.javaClass.simpleName == "CompilationFailedException" -> "$toolName failed: see the $toolName errors above"
                 else -> "$toolName failed: ${root.message ?: root.javaClass.simpleName}"
             }
@@ -153,9 +194,64 @@ class DexStep(private val tools: ToolsManager) {
         }
     }
 
+    /** Waits a little for a D8 an earlier build gave up on; it holds memory until it ends. */
+    private fun waitForAbandoned(toolName: String, emit: (String) -> Unit) {
+        val old = abandoned ?: return
+        if (!old.isDone) {
+            emit("$toolName: waiting for the last build's $toolName to let go of its memory…")
+            runCatching { old.get(ABANDONED_WAIT_SECONDS, TimeUnit.SECONDS) }
+        }
+        if (!old.isDone) {
+            throw RuntimeException(
+                "The last build's $toolName is still running and using memory. Close and reopen Bori Code, then build again.",
+            )
+        }
+        abandoned = null
+    }
+
     companion object {
-        private const val DEX_TIMEOUT_SECONDS = 300L
+        private const val HEARTBEAT_SECONDS = 10L
+        private const val DEX_MAX_SECONDS = 600L
+        private const val DEX_STALL_SECONDS = 120L
+        private const val HEAP_FULL_SECONDS = 90L
+        private const val HEAP_FULL_FRACTION = 0.95
+        private const val MIN_CPU_MS_PER_BEAT = 200L
+        private const val ABANDONED_WAIT_SECONDS = 30L
+
+        /** A D8/R8 run a timeout gave up on; its threads can't be stopped, only waited for. */
+        @Volatile private var abandoned: Future<*>? = null
         private const val MAX_TOOL_LINES = 60
+        private val KOTLIN_METADATA_WARNING = Regex("Unexpected error during rewriting of Kotlin metadata", RegexOption.IGNORE_CASE)
+
+        /**
+         * D8's stderr without stack frames and repeats. Its "rewriting of Kotlin metadata" warning
+         * comes once per class (D8 predates the project's Kotlin metadata; harmless): the first stays,
+         * the rest become a count.
+         */
+        fun tidyToolOutput(lines: List<String>): List<String> {
+            val kept = lines.filter { it.isNotBlank() && !it.trimStart().startsWith("at ") }.distinct()
+            val metadata = kept.count { KOTLIN_METADATA_WARNING.containsMatchIn(it) }
+            if (metadata <= 1) return kept
+            val first = kept.indexOfFirst { KOTLIN_METADATA_WARNING.containsMatchIn(it) }
+            return kept.filterIndexed { i, l -> i == first || !KOTLIN_METADATA_WARNING.containsMatchIn(l) }
+                .toMutableList()
+                .apply { add(first + 1, "…the same warning for ${metadata - 1} more classes (harmless: the app still works)") }
+        }
+
+        /** Whether an OutOfMemoryError is anywhere in [e]'s causes, targets or suppressed exceptions. */
+        fun findOutOfMemory(e: Throwable): Boolean {
+            val seen = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Throwable, Boolean>())
+            val queue = ArrayDeque<Throwable>().apply { add(e) }
+            while (queue.isNotEmpty()) {
+                val t = queue.removeFirst()
+                if (!seen.add(t)) continue
+                if (t is OutOfMemoryError) return true
+                t.cause?.let(queue::add)
+                (t as? java.lang.reflect.InvocationTargetException)?.targetException?.let(queue::add)
+                t.suppressed.forEach(queue::add)
+            }
+            return false
+        }
 
         /** The classes*.dex files in [dir], in order (classes.dex, classes2.dex, …). */
         fun dexFiles(dir: File): List<File> =

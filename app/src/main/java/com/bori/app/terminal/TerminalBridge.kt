@@ -64,12 +64,19 @@ class TerminalBridge @Inject constructor(
             // answered) the text is what it waits for.
             AgentState.WAITING -> if (CliStatus.mayBeAsking(lines) && CliStatus.parse(lines) == null) {
                 "$name is asking something in the terminal: answer it with the buttons above first."
-            } else { manager.typeLine(tab.session, text); null }
+            } else { type(tabId, tab.session, text) }
             AgentState.WORKING -> if (CliStatus.parse(lines) != null) {
                 "$name is still working. Wait for it to finish, or tap Stop."
-            } else { manager.typeLine(tab.session, text); null }
-            else -> { manager.typeLine(tab.session, text); null }
+            } else { type(tabId, tab.session, text) }
+            else -> { type(tabId, tab.session, text) }
         }
+    }
+
+    /** Types [text] and Enter into the tab; an agy tab counts as working from here. */
+    private fun type(tabId: Int, session: com.termux.terminal.TerminalSession, text: String): String? {
+        manager.typeLine(session, text)
+        manager.onMessageSent(tabId)
+        return null
     }
 
     /**
@@ -88,6 +95,8 @@ class TerminalBridge @Inject constructor(
         val error: String? = null,
         /** Its input line is showing: it's ready for a message, whatever a stale hook state says. */
         val atPrompt: Boolean = false,
+        /** The tool an agent read from its transcript (Antigravity) is running: "write_file · app/Main.kt". */
+        val activity: String? = null,
     )
 
     /** Tab [tabId]'s live status and menu, re-read from its screen a few times a second while collected. */
@@ -96,7 +105,15 @@ class TerminalBridge @Inject constructor(
             val lines = manager.bottomLines(tabId, SCAN_LINES)
             if (lines == null) emit(Live()) else {
                 val menu = CliStatus.menu(lines)
-                val status = if (menu == null) CliStatus.parse(lines) else null
+                // Antigravity: what its screen says it's doing, else the tool its transcript has running,
+                // so Chat's card and the terminal show the same thing.
+                val agy = manager.tabs.value.firstOrNull { it.id == tabId }?.command == "antigravity"
+                val activity = manager.agentActivity.value[tabId]
+                val status = when {
+                    menu != null -> null
+                    agy -> CliStatus.parse(lines, agy = true) ?: activity?.let { CliStatus.Status(it) }
+                    else -> CliStatus.parse(lines)
+                }
                 // WAITING outlives its question (it clears on the next hook): not while the spinner runs
                 // again, and not at the input line after an approval was answered or turned down.
                 // Nor once nothing on screen reads like a question: an approval turned down or a turn
@@ -116,6 +133,7 @@ class TerminalBridge @Inject constructor(
                     mode = CliStatus.mode(lines),
                     error = error,
                     atPrompt = menu == null && status == null && CliStatus.atPrompt(lines),
+                    activity = activity,
                 ))
             }
             delay(LIVE_POLL_MS)
@@ -213,6 +231,65 @@ class TerminalBridge @Inject constructor(
 
     fun showInTerminal(tabId: Int) = manager.select(tabId)
 
+    // ---- Auto-enter, from Chat: the same switch and counts as the terminal's bot
+
+    val autoEnter get() = manager.autoEnter
+    fun setAutoEnter(tabId: Int, on: Boolean) = manager.setAutoEnter(tabId, on)
+    val autoEnterStats: AutoEnterStats get() = manager.autoEnterStats
+
+    // ---- Earlier conversations of a CLI in this project
+
+    /** One earlier conversation of a CLI: when it was last written and the first thing asked. */
+    data class PastSession(val title: String, val updatedAt: Long, val current: Boolean)
+
+    /**
+     * [target]'s earlier conversations in the project at [projectRoot], newest first: Antigravity's
+     * transcripts that touched the project's folder, or Claude Code's for that folder.
+     */
+    fun pastSessions(target: Target, projectRoot: String?): List<PastSession> {
+        val home = manager.guestHome(target.tabId) ?: return emptyList()
+        val name = projectRoot?.let { File(it).name }?.takeIf { it.isNotBlank() } ?: return emptyList()
+        val guestDir = "/root/workspace/$name"
+        val current = manager.transcriptFile(target.tabId)
+        val files = when (target.command) {
+            "antigravity" -> File(home, ".gemini/antigravity-cli/brain").listFiles().orEmpty()
+                .map { File(it, ".system_generated/logs/transcript.jsonl") }
+                .filter { it.isFile && headOf(it).contains(guestDir) }
+            else -> File(home, ".claude/projects/${guestDir.replace(Regex("[^A-Za-z0-9]"), "-")}")
+                .listFiles { f -> f.extension == "jsonl" }.orEmpty().toList()
+        }
+        return files.sortedByDescending { it.lastModified() }.take(MAX_PAST).mapNotNull { f ->
+            val title = firstRequest(headOf(f), target.command) ?: return@mapNotNull null
+            PastSession(title, f.lastModified(), f == current)
+        }
+    }
+
+    private fun headOf(file: File): String = runCatching {
+        RandomAccessFile(file, "r").use { raf ->
+            val bytes = ByteArray(minOf(raf.length(), HEAD_BYTES).toInt())
+            raf.readFully(bytes)
+            String(bytes, Charsets.UTF_8)
+        }
+    }.getOrDefault("")
+
+    private fun firstRequest(head: String, command: String?): String? = head.lineSequence().firstNotNullOfOrNull { line ->
+        val o = runCatching { JSONObject(line) }.getOrNull() ?: return@firstNotNullOfOrNull null
+        val text = if (command == "antigravity") {
+            o.takeIf { it.optString("type") == "USER_INPUT" }?.optString("content")
+                ?.substringAfter("<USER_REQUEST>")?.substringBefore("</USER_REQUEST>")
+        } else {
+            o.takeIf { it.optString("type") == "user" }?.optJSONObject("message")?.let { m ->
+                m.opt("content") as? String ?: (m.opt("content") as? JSONArray)?.let { arr ->
+                    (0 until arr.length()).firstNotNullOfOrNull { arr.optJSONObject(it)?.takeIf { b -> b.optString("type") == "text" }?.optString("text") }
+                }
+            }?.takeUnless { it.startsWith("<") || it.startsWith("Caveat:") }
+        }
+        text?.trim()?.replace(Regex("\\s+"), " ")?.take(140)?.ifEmpty { null }
+    }
+
+    /** Opens the CLI's own conversation picker in tab [tabId] (both CLIs have `/resume`). */
+    fun openResume(tabId: Int): String? = send(tabId, "/resume")
+
     /** An agent Chat can start: [cli] in [distroId]. */
     data class Startable(val distroId: String, val cli: CliLauncher)
 
@@ -287,6 +364,7 @@ class TerminalBridge @Inject constructor(
                 path = file.path
                 messages.clear()
                 toolMessages.clear()
+                agyCalls.clear()
                 lastCommand = null
                 carry = ""
                 offset = (length - FIRST_READ_BYTES).coerceAtLeast(0)
@@ -398,24 +476,42 @@ class TerminalBridge @Inject constructor(
 
         private fun stripAnsi(s: String) = ANSI.replace(s, "")
 
-        /** One step of Antigravity's transcript (brain/<id>/.system_generated/logs/transcript.jsonl). */
+        /** The last planner step's tool calls still waiting for their result, in order (message ids). */
+        private val agyCalls = ArrayDeque<Long>()
+
+        /**
+         * One step of Antigravity's transcript (brain/<id>/.system_generated/logs/transcript.jsonl): what
+         * the user asked, agy's thinking, reply and tool calls (a PLANNER_RESPONSE), and each call's
+         * result (the GENERIC steps after it, one per call in order), added under the call.
+         */
         private fun agyLine(line: String) {
-            if ("USER_INPUT" !in line && "PLANNER_RESPONSE" !in line) return
+            if ("USER_INPUT" !in line && "PLANNER_RESPONSE" !in line && "GENERIC" !in line) return
             val o = runCatching { JSONObject(line) }.getOrNull() ?: return
             when (o.optString("type")) {
                 "USER_INPUT" -> {
+                    agyCalls.clear()
                     val c = o.optString("content")
                     add("user", USER_REQUEST.find(c)?.groupValues?.get(1) ?: c)
                 }
                 "PLANNER_RESPONSE" -> {
+                    agyCalls.clear()
                     add("thinking", o.optString("thinking"))
-                    add("assistant", o.optString("content"))
+                    add("assistant", AgyTranscript.cleanLinks(o.optString("content")))
                     val calls = o.optJSONArray("tool_calls") ?: return
                     for (i in 0 until calls.length()) {
                         val call = calls.optJSONObject(i) ?: continue
-                        val args = call.opt("args")?.let { a -> a as? JSONObject ?: runCatching { JSONObject(a.toString()) }.getOrNull() }
-                        add("tool_result", toolLine(call.optString("name"), args))
+                        val arg = AgyTranscript.argSummary(AgyTranscript.args(call))
+                        val name = call.optString("name").ifEmpty { "tool" }
+                        add("tool_result", if (arg != null) "[$name] $arg" else "[$name]")?.let(agyCalls::addLast)
                     }
+                }
+                "GENERIC" -> {
+                    val id = agyCalls.removeFirstOrNull() ?: return
+                    val failed = o.optString("status") == "ERROR"
+                    val out = AgyTranscript.stepOutput(o.optString("content"))
+                        .ifEmpty { o.optString("error") }
+                        .let(AgyTranscript::shortPath)
+                    if (out.isNotEmpty() || failed) appendTo(id, out.ifEmpty { "Failed" }, failed)
                 }
             }
         }
@@ -448,6 +544,8 @@ class TerminalBridge @Inject constructor(
         const val TAIL_LINES = 8
         /** Screen lines read for the status line and menus: a tall menu (a plan, a question) fits. */
         const val SCAN_LINES = 40
+        const val MAX_PAST = 30
+        const val HEAD_BYTES = 262_144L
         const val OUTPUT_LINES = 12
         const val OUTPUT_CHARS = 1_500
         val COMMAND_NAME = Regex("<command-name>([\\s\\S]*?)</command-name>")

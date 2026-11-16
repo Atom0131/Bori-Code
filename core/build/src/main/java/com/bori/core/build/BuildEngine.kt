@@ -107,9 +107,17 @@ class BuildEngine @Inject constructor(
         }
 
         val runtime = Runtime.getRuntime()
+        System.gc() // so "available" is what is really free, not garbage waiting to be collected
         val maxMb = runtime.maxMemory() / 1_048_576
         val usedMb = (runtime.totalMemory() - runtime.freeMemory()) / 1_048_576
         emit(BuildEvent.Log("Build: Heap ${maxMb - usedMb} MB available / ${maxMb} MB max — Profile: ${compilerProfile.name} — Kotlin timeout ${kotlinTimeoutSeconds}s"))
+        if (maxMb - usedMb < LOW_HEAP_MB) {
+            emit(BuildEvent.Log(
+                "⚠ Bori Code has only ${maxMb - usedMb} MB free before this build (something from an earlier build is " +
+                    "still holding memory). It may be slow; if it fails, close and reopen Bori Code and build again.",
+                BuildEvent.Log.Level.WARN,
+            ))
+        }
 
         suspend fun step(label: String, block: (log: (String) -> Unit) -> Unit) {
             emit(BuildEvent.Log("▶ $label"))
@@ -137,7 +145,7 @@ class BuildEngine @Inject constructor(
                 logs += "⚠ Resolution failed: ${e.message}"
                 emptyList()
             }
-            logs.forEach { emit(BuildEvent.Log(it)) }
+            tidyResolveLog(logs).forEach { emit(BuildEvent.Log(it)) }
             return artifacts
         }
 
@@ -352,13 +360,18 @@ class BuildEngine @Inject constructor(
 
         // 3a: R.java and BuildConfig.java, whenever AAPT2 link ran or BuildConfig changed
         val buildConfigDir = File(buildRoot, "generated/buildconfig")
-        val buildConfigFiles = writeBuildConfigs(modules, variant, buildConfigDir) + writeViewBindings(modules, File(buildRoot, "generated/viewbinding"))
+        // View Binding classes are compiled after Kotlin (step 3d), as AGP does: a layout can use a
+        // custom view written in Kotlin, which R.java's compile can't see yet.
+        val viewBindingDir = File(buildRoot, "generated/viewbinding")
+        val bindingFiles = writeViewBindings(modules, viewBindingDir)
+        val buildConfigFiles = writeBuildConfigs(modules, variant, buildConfigDir) + bindingFiles
         val buildConfigChanged = cache.changed("buildconfig", buildConfigFiles)
+        val bindingRoots = if (bindingFiles.isNotEmpty()) listOf(viewBindingDir) else emptyList()
         if (resManifestChanged || buildConfigChanged) {
-            emit(BuildEvent.Log("▶ Java compile R.java + BuildConfig${if (modules.any { it.viewBinding }) " + View Binding" else ""}"))
+            emit(BuildEvent.Log("▶ Java compile R.java + BuildConfig"))
             val logs = mutableListOf<String>()
             val ok = JavaCompileStep(toolsManager).compile(
-                sourceRoots = listOf(rJavaDir, buildConfigDir, File(buildRoot, "generated/viewbinding")),
+                sourceRoots = listOf(rJavaDir, buildConfigDir),
                 classesDir = classesDir,
                 extraClasspath = baseClasspath,
                 applyHiddenApiBypass = { kotlinDaemon.applyHiddenApiBypass() },
@@ -397,7 +410,7 @@ class BuildEngine @Inject constructor(
                     "$p:incremental=false",
                 ) + apOptions.map { "$p:apoption=$it" }
                 val ok = KotlinCompileStep(toolsManager).compile(
-                    sourceRoots = sourceRoots,
+                    sourceRoots = sourceRoots + bindingRoots,
                     classesDir = File(kspRoot, "analysis-out").also { it.mkdirs() },
                     extraClasspath = listOf(classesDir) + baseClasspath,
                     timeoutSeconds = kotlinTimeoutSeconds,
@@ -417,7 +430,8 @@ class BuildEngine @Inject constructor(
             }
         }
         val generatedRoots = if (processors.isEmpty()) emptyList() else listOf(kspKotlinOut, kspJavaOut)
-        val kotlinRoots = sourceRoots + generatedRoots
+        // The binding sources are read (not compiled) by kotlinc, so Kotlin code can use them.
+        val kotlinRoots = sourceRoots + generatedRoots + bindingRoots
         val allKtFiles = ktFiles + (if (processors.isEmpty()) emptyList() else kspKotlinOut.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList())
 
         // 3c: Kotlin — skipped when no sources changed (plugins and KSP always force a full compile)
@@ -445,14 +459,16 @@ class BuildEngine @Inject constructor(
         }
 
         // 3d: Java (ECJ): the project's Java sources and the Java that KSP generated
-        val javaSourceRoots = sourceRoots + listOf(kspJavaOut).filter { processors.isNotEmpty() && it.walkTopDown().any { f -> f.extension == "java" } }
+        val javaSourceRoots = sourceRoots + bindingRoots + listOf(kspJavaOut).filter { processors.isNotEmpty() && it.walkTopDown().any { f -> f.extension == "java" } }
         val generatedJava = processors.isNotEmpty() && kspJavaOut.walkTopDown().any { it.extension == "java" }
         val javaChanged = javaUserFiles.isNotEmpty() && cache.changed("sources-java", javaUserFiles + baseClasspath)
-        if (generatedJava || javaChanged || (javaUserFiles.isNotEmpty() && (resManifestChanged || buildConfigChanged || recompiled))) {
+        val hasJava = javaUserFiles.isNotEmpty() || bindingFiles.isNotEmpty()
+        if (generatedJava || javaChanged || (hasJava && (resManifestChanged || buildConfigChanged || recompiled))) {
             // One ECJ run covers every module, so it takes the highest level any of them asks for.
             val javaLevel = (modules.mapNotNull { it.javaLevel }.maxOrNull() ?: JavaCompileStep.DEFAULT_JAVA_LEVEL)
                 .coerceIn(8, JavaCompileStep.MAX_JAVA_LEVEL)
-            emit(BuildEvent.Log(if (generatedJava) "▶ Java $javaLevel compile (ECJ + generated sources)" else "▶ Java $javaLevel compile (ECJ)"))
+            val extras = listOfNotNull("generated sources".takeIf { generatedJava }, "View Binding".takeIf { bindingFiles.isNotEmpty() })
+            emit(BuildEvent.Log("▶ Java $javaLevel compile (ECJ${extras.joinToString("") { " + $it" }})"))
             val compileLogs = mutableListOf<String>()
             val compileOk = JavaCompileStep(toolsManager).compile(
                 sourceRoots = javaSourceRoots,
@@ -468,7 +484,7 @@ class BuildEngine @Inject constructor(
             }
             if (!generatedJava) cache.markClean("sources-java", javaUserFiles + baseClasspath)
             recompiled = true
-        } else if (javaUserFiles.isNotEmpty()) {
+        } else if (hasJava) {
             emit(BuildEvent.Log("↩ Skipped Java compile (sources unchanged)"))
         }
 
@@ -554,6 +570,12 @@ class BuildEngine @Inject constructor(
             // change only re-dexes the app's own classes.
             val appDexDir = File(dexRoot, "app")
             if (recompiled || DexStep.dexFiles(appDexDir).isEmpty()) {
+                // D8 reads every dependency as classpath; the warm compiler (just loaded for KSP and
+                // kotlinc) can leave too little heap for that, and D8 then crawls until it times out.
+                if (freeHeapMb() < DEX_FREE_HEAP_MB) {
+                    kotlinDaemon.clearCache()
+                    System.gc()
+                }
                 step("DEX (D8)") { log ->
                     DexStep(toolsManager).convert(
                         inputs = listOf(classesDir),
@@ -573,16 +595,31 @@ class BuildEngine @Inject constructor(
             userLibs.classesJar?.let { libsJar ->
                 val libsDexDir = File(dexRoot, "libs")
                 if (cache.changed("dex-libs", libsJar) || DexStep.dexFiles(libsDexDir).isEmpty()) {
+                    // Dexing every dependency at once needs most of the heap (a 45 MB jar ran a
+                    // 512 MB heap out with the warm Kotlin compiler still loaded), as R8 does above.
+                    kotlinDaemon.clearCache()
+                    System.gc()
                     step("DEX (D8) dependencies") { log ->
-                        DexStep(toolsManager).convert(
-                            inputs = listOf(libsJar),
-                            dexOutputDir = libsDexDir,
-                            minSdk = dexMinApi,
-                            emit = log,
-                            classpath = bundleClasspath,
-                            variant = variant,
-                            desugaredLibConfig = desugarConfig,
-                        )
+                        val dex = { threads: Int? ->
+                            DexStep(toolsManager).convert(
+                                inputs = listOf(libsJar),
+                                dexOutputDir = libsDexDir,
+                                minSdk = dexMinApi,
+                                emit = log,
+                                classpath = bundleClasspath,
+                                variant = variant,
+                                desugaredLibConfig = desugarConfig,
+                                threads = threads,
+                            )
+                        }
+                        try {
+                            dex(null)
+                        } catch (e: DexStep.OutOfMemory) {
+                            // One thread holds far less in flight: slower, but it fits.
+                            log("D8: out of memory; trying again on one thread")
+                            System.gc()
+                            dex(1)
+                        }
                     }
                     cache.markClean("dex-libs", libsJar)
                 }
@@ -1020,6 +1057,38 @@ class BuildEngine @Inject constructor(
 
         /** androidx.databinding:viewbinding, which AGP adds for View Binding (its version follows AGP's). */
         private const val VIEWBINDING_VERSION = "8.7.3"
+        /** Below this much free heap at the start, the build log says so. */
+        private const val LOW_HEAP_MB = 250L
+        /** Below this much free heap, the warm compiler is let go before the app's D8. */
+        private const val DEX_FREE_HEAP_MB = 300L
+
+        /**
+         * The resolver's log without one "Resolving x… / ✓ Cached" pair per library (a project with
+         * 160 libraries buried its errors under them): those become one count. Downloads, misses and
+         * warnings stay as they are.
+         */
+        fun tidyResolveLog(lines: List<String>): List<String> {
+            val out = mutableListOf<String>()
+            var cached = 0
+            var i = 0
+            while (i < lines.size) {
+                val line = lines[i]
+                val next = lines.getOrNull(i + 1)
+                when {
+                    line.startsWith("Resolving ") && next?.trimStart()?.startsWith("✓ Cached:") == true -> { cached++; i += 2; continue }
+                    line.trimStart().startsWith("✓ Cached:") -> cached++
+                    else -> out += line
+                }
+                i++
+            }
+            if (cached > 0) out += "✓ $cached librar${if (cached == 1) "y" else "ies"} already downloaded"
+            return out
+        }
+
+        private fun freeHeapMb(): Long {
+            val rt = Runtime.getRuntime()
+            return (rt.maxMemory() - (rt.totalMemory() - rt.freeMemory())) / 1_048_576
+        }
 
         /** Used when isCoreLibraryDesugaringEnabled is on without a coreLibraryDesugaring(...) line. */
         private const val DESUGAR_JDK_LIBS_VERSION = "2.1.3"

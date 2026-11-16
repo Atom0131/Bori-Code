@@ -130,8 +130,60 @@ class ChatViewModel @Inject constructor(
     private val usageRepository: com.bori.app.data.usage.UsageRepository,
     private val tutorialSession: com.bori.app.ui.tutorial.TutorialSession,
     private val terminalBridge: com.bori.app.terminal.TerminalBridge,
+    private val sessionState: com.bori.app.data.prefs.SessionStateStore,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    // ---- Auto-enter for the terminal tab Chat sends to (the terminal's bot, same switch and counts)
+
+    val autoEnter: StateFlow<Map<Int, com.bori.app.terminal.AutoEnterStatus>> get() = terminalBridge.autoEnter
+
+    val autoEnterExplained: StateFlow<Boolean> =
+        sessionState.autoEnterExplained.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun setTerminalAutoEnter(tabId: Int, on: Boolean) = terminalBridge.setAutoEnter(tabId, on)
+
+    fun markAutoEnterExplained() {
+        viewModelScope.launch { sessionState.markAutoEnterExplained() }
+    }
+
+    fun autoEnterTotals() = terminalBridge.autoEnterStats.totals()
+
+    /** Writes auto-enter's counts to [uri] (the same file as the terminal's Export stats). */
+    suspend fun exportAutoEnterStats(uri: android.net.Uri): String = withContext(Dispatchers.IO) {
+        runCatching {
+            val out = context.contentResolver.openOutputStream(uri, "wt") ?: error("Couldn't open the file")
+            "Saved ${terminalBridge.autoEnterStats.exportTo(out)} Enters"
+        }.getOrElse { "Export failed: ${it.message}" }
+    }
+
+    /** Merges a stats file in; per day the higher count wins, so importing twice is harmless. */
+    suspend fun importAutoEnterStats(uri: android.net.Uri): String = withContext(Dispatchers.IO) {
+        runCatching {
+            val input = context.contentResolver.openInputStream(uri) ?: error("Couldn't open the file")
+            val (days, added) = terminalBridge.autoEnterStats.importFrom(input)
+            "Imported: $days day${if (days == 1) "" else "s"} updated, +$added Enters"
+        }.getOrElse { if (it is IllegalArgumentException) "That isn't an auto-enter stats file" else "Import failed: ${it.message}" }
+    }
+
+    // ---- History: earlier conversations
+
+    /** Bori agent's saved conversations, newest first. */
+    val sessions: StateFlow<List<ChatSessionEntity>> =
+        sessionDao.getAllSessions().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The CLI's earlier conversations in this project, when Chat sends to a terminal tab. */
+    suspend fun pastTerminalSessions(): List<com.bori.app.terminal.TerminalBridge.PastSession> {
+        val target = terminalTarget.value ?: return emptyList()
+        val root = activeRoot()?.path
+        return withContext(Dispatchers.IO) { runCatching { terminalBridge.pastSessions(target, root) }.getOrDefault(emptyList()) }
+    }
+
+    /** Opens the CLI's own conversation picker (/resume) in the terminal tab Chat sends to. */
+    fun resumeInTerminal() {
+        val tabId = terminalTarget.value?.tabId ?: return
+        terminalBridge.openResume(tabId)?.let { why -> viewModelScope.launch { _snackbarEvent.emit(why) } }
+    }
 
     // ---- Chat → a coding CLI in a terminal tab (TerminalBridge)
 
@@ -1629,6 +1681,31 @@ class ChatViewModel @Inject constructor(
             }
         }
     }
+
+    /** Opens Bori agent's saved conversation [id] in Chat. */
+    fun openSession(id: Long) {
+        if (_isLoading.value || id == activeSessionId) return
+        viewModelScope.launch {
+            activeSessionId = id
+            agentHistory.clear()
+            resetToolBatch()
+            _showCompactBanner.value = false
+            withContext(Dispatchers.IO) { refreshMessages() }
+            seedAgentHistoryFromDb()
+        }
+    }
+
+    /** Starts a new Bori agent conversation; the current one stays in History. */
+    fun newConversation() {
+        if (_isLoading.value) return
+        activeSessionId = -1
+        agentHistory.clear()
+        resetToolBatch()
+        _showCompactBanner.value = false
+        _messages.value = emptyList()
+    }
+
+    val activeSession: Long get() = activeSessionId
 
     private suspend fun refreshMessages() {
         _messages.value = messageDao.getRecentMessages(activeSessionId, limit = 100).reversed()

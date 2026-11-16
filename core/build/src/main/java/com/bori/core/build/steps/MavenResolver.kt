@@ -166,8 +166,12 @@ class MavenResolver(private val cacheDir: File, extraRepos: List<String> = empty
             tryDownload("$repo/$base.jar", cacheJar)
                 ?.let { emit("  ↓ Downloaded: ${it.name} (${it.length() / 1024} KB)"); return ResolvedArtifact(it, false, coord) }
         }
-        // A POM-only module (a Kotlin Multiplatform root or a relocation) has nothing to package.
-        if (File(cacheDir, "$base.pom").exists()) return null
+        // A POM-only module (a Kotlin Multiplatform root or a relocation) has nothing to package;
+        // a multiplatform root's JVM/Android jar was added as its dependency.
+        if (File(cacheDir, "$base.pom").exists()) {
+            emit("  · $coord has no jar of its own (a platform or multiplatform root)")
+            return null
+        }
         emit("  ✗ Not found in any repository: $coord")
         return null
     }
@@ -263,7 +267,15 @@ class MavenResolver(private val cacheDir: File, extraRepos: List<String> = empty
             Dep(d.group, d.artifact, d.version?.let(::cleanVersion), d.scope, d.optional, d.type, d.exclusions)
         }
         val packaging = topLevel(withoutParent, "packaging") ?: "jar"
-        return Pom(props, managed, deps, packaging).also { poms[key] = it }
+        // A Kotlin Multiplatform library's root POM may not name its JVM/Android jar at all: only the
+        // Gradle .module file does ("available-at"). Gradle follows it, so this does too.
+        val kmp = if (GRADLE_METADATA_MARKER in text) {
+            moduleText(group, artifact, version)?.let(::kmpTarget)
+                ?.takeIf { t -> deps.none { it.ga == t.substringBeforeLast(':') } }
+                ?.split(":")
+                ?.let { (g, a, v) -> Dep(g, a, v, "runtime", false, "jar", emptySet()) }
+        } else null
+        return Pom(props, managed, deps + listOfNotNull(kmp), packaging).also { poms[key] = it }
     }
 
     private fun pomText(group: String, artifact: String, version: String): String? {
@@ -272,6 +284,18 @@ class MavenResolver(private val cacheDir: File, extraRepos: List<String> = empty
         if (!dest.exists()) {
             for (repo in reposFor("$group:$artifact")) {
                 if (tryDownload("$repo/$path", dest) != null) { repoOf["$group:$artifact"] = repo; break }
+            }
+        }
+        return runCatching { dest.takeIf { it.exists() }?.readText() }.getOrNull()
+    }
+
+    /** The Gradle module metadata (.module) of g:a:v, cached next to its POM. */
+    private fun moduleText(group: String, artifact: String, version: String): String? {
+        val path = "${group.replace('.', '/')}/$artifact/$version/$artifact-$version.module"
+        val dest = File(cacheDir, path)
+        if (!dest.exists()) {
+            for (repo in reposFor("$group:$artifact")) {
+                if (tryDownload("$repo/$path", dest) != null) break
             }
         }
         return runCatching { dest.takeIf { it.exists() }?.readText() }.getOrNull()
@@ -320,6 +344,30 @@ class MavenResolver(private val cacheDir: File, extraRepos: List<String> = empty
         )
 
         private val RUNTIME_SCOPES = setOf("compile", "runtime")
+        private const val GRADLE_METADATA_MARKER = "published-with-gradle-metadata"
+
+        /**
+         * The "group:module:version" a Kotlin Multiplatform root's .module points Android builds at:
+         * its Android runtime variant (release first), else its JVM one. Null if it names neither.
+         */
+        fun kmpTarget(moduleJson: String): String? = runCatching {
+            val variants = org.json.JSONObject(moduleJson).optJSONArray("variants") ?: return null
+            val candidates = (0 until variants.length()).mapNotNull { i ->
+                val v = variants.optJSONObject(i) ?: return@mapNotNull null
+                val attrs = v.optJSONObject("attributes") ?: return@mapNotNull null
+                val at = v.optJSONObject("available-at") ?: return@mapNotNull null
+                if (attrs.optString("org.gradle.usage") != "java-runtime") return@mapNotNull null
+                val rank = when (attrs.optString("org.jetbrains.kotlin.platform.type")) {
+                    "androidJvm" -> if (v.optString("name").contains("debug", ignoreCase = true)) 1 else 0
+                    "jvm" -> 2
+                    else -> return@mapNotNull null
+                }
+                val g = at.optString("group"); val m = at.optString("module"); val ver = at.optString("version")
+                if (g.isEmpty() || m.isEmpty() || ver.isEmpty()) return@mapNotNull null
+                rank to "$g:$m:$ver"
+            }
+            candidates.minByOrNull { it.first }?.second
+        }.getOrNull()
 
         /** A Maven range keeps its lower bound ("[1.2,2.0)" → "1.2"); Gradle's dynamic "1.+" isn't supported. */
         fun cleanVersion(v: String): String {

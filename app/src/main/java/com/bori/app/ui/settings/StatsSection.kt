@@ -57,7 +57,7 @@ fun StatsSection() {
     var canDraw by remember { mutableStateOf(FloatingStats.canDraw(context)) }
     LifecycleResumeEffect(Unit) {
         canDraw = FloatingStats.canDraw(context)
-        apply(context) { it }
+        applyStatsSettings(context) { it }
         onPauseOrDispose {}
     }
 
@@ -77,7 +77,7 @@ fun StatsSection() {
             modifier = Modifier.padding(bottom = 8.dp),
         )
         SwitchRow("Show stats overlay", "A small panel you can drag anywhere. Tap it for more; long-press for these settings.", s.overlay) { on ->
-            apply(context) { it.copy(overlay = on) }
+            applyStatsSettings(context) { it.copy(overlay = on) }
         }
         if (FloatingStats.AVAILABLE && s.overlay) {
             SwitchRow(
@@ -90,12 +90,12 @@ fun StatsSection() {
                     StatsPrefs.update { it.copy(overApps = true) }
                     FloatingStats.permissionIntent(context)?.let { runCatching { context.startActivity(it) } }
                 } else {
-                    apply(context) { it.copy(overApps = on) }
+                    applyStatsSettings(context) { it.copy(overApps = on) }
                 }
             }
         }
         SwitchRow("Show stats in the notification", "Bori's notification, while a terminal, build or reply is running.", s.inNotification) { on ->
-            apply(context) { it.copy(inNotification = on) }
+            applyStatsSettings(context) { it.copy(inNotification = on) }
         }
         Text("Stats to show", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -105,7 +105,7 @@ fun StatsSection() {
                 val available = tokenStat || snapshot?.has(kind, tokens) != false
                 FilterChip(
                     selected = kind in s.shown && available,
-                    onClick = { apply(context) { it.copy(shown = if (kind in it.shown) it.shown - kind else it.shown + kind) } },
+                    onClick = { applyStatsSettings(context) { it.copy(shown = if (kind in it.shown) it.shown - kind else it.shown + kind) } },
                     enabled = available,
                     label = { Text(kind.label) },
                     colors = crystalFilterChipColors(),
@@ -133,7 +133,7 @@ fun StatsSection() {
 }
 
 /** Saves [change] and brings the notification and the floating panel in line with it. */
-private fun apply(context: Context, change: (StatsSettings) -> StatsSettings) {
+internal fun applyStatsSettings(context: Context, change: (StatsSettings) -> StatsSettings) {
     StatsPrefs.update(change)
     StatsSampler.syncNotification(context)
     com.bori.app.service.StatusNotifier.refresh(context)

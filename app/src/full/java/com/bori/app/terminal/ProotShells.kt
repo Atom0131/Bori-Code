@@ -48,6 +48,8 @@ class ProotShells @Inject constructor(
 
     override fun guestHome(distroId: String): File = File(proot.rootfs(distroId), "root")
 
+    override fun keepAgentSettings(distroId: String): Boolean = guestPolicy.keepAntigravitySettings(distroId)
+
     override fun deviceStatusFile(): File = File(proot.handoffDir, ProotLauncher.DEVICE_FILE)
 
     override fun installedClis(distroId: String): List<CliLauncher> {

@@ -1062,6 +1062,11 @@ dependencies {
 
     implementation(project(":core:project"))
 
+    // Unit tests for the pure parts (resolver metadata, log tidying); org.json is Android's at run time.
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlin.stdlib)
+    testImplementation("org.json:json:20240303")
+
     // Java compiler (ECJ), patched for ART by patchEcj
     ecjSource(libs.ecj)
     implementation(files(patchEcj))

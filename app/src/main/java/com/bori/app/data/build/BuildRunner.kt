@@ -118,6 +118,7 @@ class BuildRunner @Inject constructor(
                                     project.rootPath, ok = false,
                                     "${variant.name.lowercase()} build, error: ${event.error.lineSequence().firstOrNull().orEmpty().take(300)}",
                                     System.currentTimeMillis() - startedAt,
+                                    allMessages + event.error,
                                 )
                             }
                             BuildEvent.Started -> Unit
@@ -169,10 +170,11 @@ class BuildRunner @Inject constructor(
     }
 
     /** Every agent (built-in, Claude Code, Antigravity) reads the last real build from .bori/handoff.md. */
-    private fun recordBuildForAgents(rootPath: String, ok: Boolean, summary: String, tookMs: Long) {
+    private fun recordBuildForAgents(rootPath: String, ok: Boolean, summary: String, tookMs: Long, logs: List<String> = emptyList()) {
         if (rootPath.isBlank()) return
         scope.launch(Dispatchers.IO) {
-            runCatching { AgentFiles.appendBuildResult(File(rootPath), ok, summary, tookMs) }
+            val errors = if (ok) emptyList() else AgentFiles.errorLines(logs, rootPath)
+            runCatching { AgentFiles.appendBuildResult(File(rootPath), ok, summary, tookMs, errors) }
         }
     }
 }

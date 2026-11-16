@@ -14,8 +14,12 @@ object AgyTranscript {
     private const val TAIL_BYTES = 65_536L
     private val FEEDBACK = Regex("\\\\?\"RequestFeedback\\\\?\"\\s*:\\s*true", RegexOption.IGNORE_CASE)
 
-    /** The next tool call that hasn't run; [key] changes with every step. */
-    class Pending(val key: String, val name: String)
+    /**
+     * The next tool call that hasn't run; [key] changes with every step. It may be waiting for an
+     * approval or simply running (a long write_file): the transcript can't tell, the screen can.
+     * [detail] is its main argument ("app/Main.kt", "./gradlew build"), when it has one.
+     */
+    class Pending(val key: String, val name: String, val detail: String? = null)
 
     /** Where the turn is: a tool waiting, a question or plan for the user, or finished. */
     class Turn(val pending: Pending?, val asksUser: Boolean, val complete: Boolean)
@@ -71,9 +75,61 @@ object AgyTranscript {
         if (count == 0) return Turn(null, asks, complete = planner == steps.lastIndex)
         if (done >= count) return Turn(null, asks, complete = false)
         val index = step.optInt("step_index", planner)
-        val name = calls?.optJSONObject(done)?.optString("name")?.ifEmpty { null } ?: "tool_call"
-        return Turn(Pending("$index:$done", name), asks, complete = false)
+        val call = calls?.optJSONObject(done)
+        val name = call?.optString("name")?.ifEmpty { null } ?: "tool_call"
+        return Turn(Pending("$index:$done", name, argSummary(args(call))), asks, complete = false)
     }
+
+    /** A tool call's arguments: an object, or one encoded as a string. */
+    fun args(call: JSONObject?): JSONObject? = call?.opt("args")?.let { a ->
+        a as? JSONObject ?: runCatching { JSONObject(a.toString()) }.getOrNull()
+    }
+
+    /** Argument names that hold a call's main argument, most telling first. */
+    val ARG_KEYS = listOf(
+        "file_path", "path", "Path", "AbsolutePath", "TargetFile", "command", "CommandLine",
+        "pattern", "Query", "query", "url", "description",
+    )
+
+    /**
+     * The main argument of a call, one line: agy JSON-encodes its values (`"\"/root/x\""`), so the
+     * quotes come off, and a path in the workspace loses its `/root/workspace/<project>/` start.
+     */
+    fun argSummary(args: JSONObject?): String? {
+        val raw = ARG_KEYS.firstNotNullOfOrNull { k -> args?.optString(k)?.takeIf { it.isNotBlank() } } ?: return null
+        val value = unquote(raw).lineSequence().first().trim()
+        return shortPath(value).take(120).ifEmpty { null }
+    }
+
+    private fun unquote(s: String): String {
+        val t = s.trim()
+        if (t.length < 2 || !t.startsWith('"') || !t.endsWith('"')) return t
+        return runCatching { org.json.JSONArray("[$t]").getString(0) }.getOrDefault(t.substring(1, t.length - 1))
+    }
+
+    private val WORKSPACE_PATH = Regex("/root/workspace/[^/]+/")
+
+    /** `/root/workspace/<project>/app/Main.kt` → `app/Main.kt`; anything else as it is. */
+    fun shortPath(s: String): String = WORKSPACE_PATH.replaceFirst(s, "").ifEmpty { s }
+
+    private val FILE_LINK = Regex("""\[([^\]]*)]\(file://(/[^)#\s]*)(?:#[^)]*)?\)""")
+
+    /**
+     * Agy's links to files (`[Main.kt](file:///root/workspace/My%20App/app/Main.kt#L3-L9)`) lead
+     * nowhere in Chat: they become the path, in code style.
+     */
+    fun cleanLinks(text: String): String = FILE_LINK.replace(text) { m ->
+        val path = shortPath(runCatching { java.net.URLDecoder.decode(m.groupValues[2].replace("+", "%2B"), "UTF-8") }
+            .getOrDefault(m.groupValues[2]))
+        val label = m.groupValues[1].trim('`', ' ')
+        if (label.isEmpty() || path.endsWith(label)) "`$path`" else "$label (`$path`)"
+    }
+
+    private val STEP_TIMES = Regex("^(Created|Completed) At: .*$")
+
+    /** A GENERIC step's text without the "Created At / Completed At" lines agy starts it with. */
+    fun stepOutput(content: String): String =
+        content.lineSequence().dropWhile { STEP_TIMES.matches(it.trim()) || it.isBlank() }.joinToString("\n").trim()
 
     private fun tail(file: File): String = RandomAccessFile(file, "r").use { f ->
         val start = (f.length() - TAIL_BYTES).coerceAtLeast(0)

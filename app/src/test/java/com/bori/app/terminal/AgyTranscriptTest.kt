@@ -56,4 +56,20 @@ class AgyTranscriptTest {
         val fresh = transcript(tmp.root, "new", planner2)
         assertEquals(fresh, AgyTranscript.latest(tmp.root, since = System.currentTimeMillis() - 10_000))
     }
+
+    @Test fun pendingCarriesItsMainArgument() {
+        val f = transcript(tmp.root, "f",
+            """{"type":"PLANNER_RESPONSE","step_index":3,"tool_calls":[{"name":"write_file","args":{"TargetFile":"\"/root/workspace/My App/app/Main.kt\""}}]}""")
+        assertEquals("app/Main.kt", AgyTranscript.read(f)!!.pending!!.detail)
+    }
+
+    @Test fun linksBecomePaths() {
+        assertEquals("See `app/Main.kt` now.", AgyTranscript.cleanLinks("See [Main.kt](file:///root/workspace/My%20App/app/Main.kt#L3-L9) now."))
+        assertEquals("the plan (`/root/.gemini/x/plan.md`)", AgyTranscript.cleanLinks("[the plan](file:///root/.gemini/x/plan.md)"))
+        assertEquals("[web](https://x.org)", AgyTranscript.cleanLinks("[web](https://x.org)"))
+    }
+
+    @Test fun stepOutputDropsTimes() {
+        assertEquals("Command exited with code 0.", AgyTranscript.stepOutput("Created At: a\nCompleted At: b\nCreated At: a\nCompleted At: b\nCommand exited with code 0."))
+    }
 }

@@ -147,6 +147,11 @@ class AutoEnter(
             "do you want to create", "hit enter", "press enter", "press return",
         ).map { Regex(it, RegexOption.IGNORE_CASE) }
 
+        /** Whether the bottom [lines] of a screen show a Yes / Enter approval prompt (past steps don't count). */
+        fun showsApproval(lines: List<String>): Boolean = lines.takeLast(BOTTOM_LINES).map(CliStatus::clean).any { line ->
+            !HISTORY.containsMatchIn(line) && IGNORES.none { it.containsMatchIn(line) } && PROMPTS.any { it.containsMatchIn(line) }
+        }
+
         /** An empty input prompt is the CLI waiting for the user, not for approval. */
         private val IGNORES = listOf("^>\\s*$", "^gemini>\\s*$", "^antigravity>\\s*$", "^agy>\\s*$")
             .map { Regex(it, RegexOption.IGNORE_CASE) }
