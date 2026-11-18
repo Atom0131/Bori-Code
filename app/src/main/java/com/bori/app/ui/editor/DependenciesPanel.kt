@@ -1,5 +1,6 @@
 ﻿package com.bori.app.ui.editor
 
+import com.bori.theme.components.crystalTextFieldColors
 import com.bori.theme.util.BoriAlertDialog
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -55,7 +56,7 @@ fun DependenciesPanel(
                     onValueChange = { addInput = it },
                     label = { Text("group:artifact:version") },
                     placeholder = { Text("com.squareup.retrofit2:retrofit:2.11.0") },
-                    singleLine = true,
+                    singleLine = true, colors = crystalTextFieldColors()
                 )
             },
             confirmButton = {

@@ -1,5 +1,7 @@
 package com.bori.app.ui.settings
 
+import com.bori.theme.components.crystalFilterChipColors
+import com.bori.theme.components.crystalTextFieldColors
 import com.bori.app.ui.common.GlassCard
 import com.bori.theme.util.BoriAlertDialog
 import androidx.compose.foundation.layout.Column
@@ -94,7 +96,7 @@ fun LocalModelSection(
         // Model choice — locked while a download runs so the progress stays with its model
         Row(modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)) {
             LocalModel.entries.forEach { model ->
-                FilterChip(
+                FilterChip(colors = crystalFilterChipColors(), 
                     selected = model == selected,
                     onClick = { choose(model) },
                     enabled = !isDownloading,
@@ -128,7 +130,7 @@ fun LocalModelSection(
         var tokenVisible by remember { mutableStateOf(false) }
         var tokenText by remember { mutableStateOf(viewModel.getHfToken()) }
 
-        OutlinedTextField(
+        OutlinedTextField(colors = crystalTextFieldColors(), 
             value = tokenText,
             onValueChange = { tokenText = it; viewModel.setHfToken(it) },
             label = { Text("HuggingFace Token") },
@@ -314,13 +316,13 @@ private fun ManualSpecsForm(specs: DeviceSpecs, onSave: (String, Double, Double)
     val storageValue = storage.toDoubleOrNull()?.takeIf { it >= 0.0 }
 
     Column {
-        OutlinedTextField(
+        OutlinedTextField(colors = crystalTextFieldColors(), 
             value = name, onValueChange = { name = it },
             label = { Text("Phone (e.g. Pixel 9)") }, singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         Row(modifier = Modifier.padding(top = 8.dp)) {
-            OutlinedTextField(
+            OutlinedTextField(colors = crystalTextFieldColors(), 
                 value = ram, onValueChange = { ram = it },
                 label = { Text("RAM (GB)") }, singleLine = true,
                 isError = ram.isNotEmpty() && ramValue == null,
@@ -328,7 +330,7 @@ private fun ManualSpecsForm(specs: DeviceSpecs, onSave: (String, Double, Double)
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))
-            OutlinedTextField(
+            OutlinedTextField(colors = crystalTextFieldColors(), 
                 value = storage, onValueChange = { storage = it },
                 label = { Text("Free storage (GB)") }, singleLine = true,
                 isError = storage.isNotEmpty() && storageValue == null,

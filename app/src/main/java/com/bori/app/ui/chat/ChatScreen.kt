@@ -6,6 +6,7 @@ import com.bori.theme.util.BoriDropdownMenu
 import com.bori.theme.components.crystalListItemColors
 import com.bori.theme.components.crystalAssistChipColors
 import com.bori.theme.components.crystalFilterChipColors
+import com.bori.theme.components.crystalChipSurface
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.widthIn
@@ -63,6 +64,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Tune
@@ -120,6 +122,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 
@@ -849,6 +852,7 @@ fun ChatScreen(
                         CliMenuCard(
                             agent = terminalTarget!!.agent,
                             menu = menu,
+                            plan = terminalLive.plan,
                             onPick = { viewModel.answerTerminal(it) },
                             onAnswerText = { n, t -> viewModel.answerTerminalText(n, t) },
                             onBack = { viewModel.backTerminal() },
@@ -989,6 +993,11 @@ fun ChatScreen(
                             }
                         },
                         onAutoEnterStats = { showAutoEnterStats = true },
+                        onKeys = { viewModel.terminalKeys(it) },
+                        onSendNow = {
+                            viewModel.sendNowTerminal(input)
+                            input = ""
+                        },
                     )
                 }
                 }
@@ -1396,6 +1405,16 @@ private fun MessageBubble(
         message.role == "tool_result" -> ToolResultBubble(content = message.content)
         message.role == "thinking"    -> ThinkingBubble(content = message.content)
         message.role == "user"        -> UserBubble(content = message.content, bubbleColor = bubbleColor, isFirstInGroup = isFirstInGroup, isLastInGroup = isLastInGroup)
+        // Sent while the CLI was working: it takes it when the turn allows (as typed in its terminal).
+        message.role == "queued"      -> Column(Modifier.fillMaxWidth().alpha(0.65f), horizontalAlignment = Alignment.End) {
+            UserBubble(content = message.content, bubbleColor = bubbleColor)
+            Text(
+                "Queued",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 16.dp, top = 2.dp),
+            )
+        }
         else                          -> AssistantBubble(content = message.content, isFirstInGroup = isFirstInGroup, isLastInGroup = isLastInGroup)
     }
 }
@@ -2255,6 +2274,8 @@ private fun TerminalTargetBar(
     autoEnterCount: Int? = null,
     onAutoEnter: () -> Unit = {},
     onAutoEnterStats: () -> Unit = {},
+    onKeys: (String) -> Unit = {},
+    onSendNow: () -> Unit = {},
 ) {
     var startMenu by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
@@ -2264,7 +2285,7 @@ private fun TerminalTargetBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (compact && chosen != null) {
-                TargetStatusLine(chosen, live, onOpenTerminal, compact = true, autoEnterCount, onAutoEnter, onAutoEnterStats)
+                TargetStatusLine(chosen, live, onOpenTerminal, compact = true, autoEnterCount, onAutoEnter, onAutoEnterStats, onKeys, onSendNow)
             }
             Text("Send to", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             FilterChip(colors = crystalFilterChipColors(), selected = chosen == null, onClick = { onChoose(null) }, label = { Text("Bori agent") })
@@ -2295,7 +2316,7 @@ private fun TerminalTargetBar(
                 }
             }
         }
-        if (chosen != null && !compact) TargetStatusLine(chosen, live, onOpenTerminal, compact = false, autoEnterCount, onAutoEnter, onAutoEnterStats)
+        if (chosen != null && !compact) TargetStatusLine(chosen, live, onOpenTerminal, compact = false, autoEnterCount, onAutoEnter, onAutoEnterStats, onKeys, onSendNow)
     }
 }
 
@@ -2309,8 +2330,11 @@ private fun TargetStatusLine(
     autoEnterCount: Int? = null,
     onAutoEnter: () -> Unit = {},
     onAutoEnterStats: () -> Unit = {},
+    onKeys: (String) -> Unit = {},
+    onSendNow: () -> Unit = {},
 ) {
     val waiting = live.menu != null || live.waiting
+    val claude = chosen.command == "claude" || chosen.agent == "Claude Code"
     Row(verticalAlignment = Alignment.CenterVertically, modifier = if (compact) Modifier else Modifier.fillMaxWidth()) {
         // The CLI's mode, as its footer shows it ("⏸ plan mode on"): Shift+Tab in the terminal changes it.
         live.mode?.let { mode ->
@@ -2322,6 +2346,8 @@ private fun TargetStatusLine(
                     .padding(end = 8.dp)
                     .clip(RoundedCornerShape(50))
                     .background(MaterialTheme.colorScheme.tertiaryContainer)
+                    // A tap is Shift+Tab, as in the terminal: the next mode.
+                    .clickable(enabled = claude, onClickLabel = "Next mode") { onKeys(TerminalKeys.SHIFT_TAB) }
                     .padding(horizontal = 10.dp, vertical = 4.dp),
             )
         }
@@ -2354,6 +2380,7 @@ private fun TargetStatusLine(
             modifier = if (compact) Modifier.widthIn(max = 320.dp) else Modifier.weight(1f),
         )
         AutoEnterChip(autoEnterCount, onAutoEnter, onAutoEnterStats)
+        KeysChip(claude = claude, onKeys = onKeys, onSendNow = onSendNow)
         TextButton(onClick = onOpenTerminal) { Text(if (waiting) "Open terminal" else "Show terminal") }
     }
 }
@@ -2370,8 +2397,8 @@ private fun AutoEnterChip(count: Int?, onToggle: () -> Unit, onStats: () -> Unit
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .padding(start = 4.dp)
+            .crystalChipSurface(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
             .clip(RoundedCornerShape(50))
-            .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
             .combinedClickable(
                 onClickLabel = if (on) "Turn auto-enter off" else "Turn auto-enter on",
                 onLongClickLabel = "Auto-enter history",
@@ -2392,6 +2419,61 @@ private fun AutoEnterChip(count: Int?, onToggle: () -> Unit, onStats: () -> Unit
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onPrimary,
             )
+        }
+    }
+}
+
+/** Key bytes Chat's key menu sends (the same as the terminal's keys). */
+private object TerminalKeys {
+    const val ESC = "\u001b"
+    const val CTRL_C = "\u0003"
+    const val SHIFT_TAB = "\u001b[Z"
+    const val TAB = "\t"
+    const val ENTER = "\r"
+}
+
+/**
+ * The terminal's keys from Chat: Claude Code's "send now" (Ctrl+X Ctrl+S: what's typed goes in at
+ * once, with anything queued), Stop (Esc), Ctrl+C, the mode cycle (Shift+Tab), Tab and Enter.
+ */
+@Composable
+private fun KeysChip(claude: Boolean, onKeys: (String) -> Unit, onSendNow: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .padding(start = 4.dp)
+                .crystalChipSurface(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .clip(RoundedCornerShape(50))
+                .clickable(onClickLabel = "Terminal keys") { open = true }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            Icon(Icons.Default.Keyboard, contentDescription = null, modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(" Keys", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        BoriDropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            fun item(label: String, hint: String, action: () -> Unit) = @Composable {
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    trailingIcon = { Text(hint, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    onClick = { open = false; action() },
+                )
+            }
+            if (claude) item("Send now", "Ctrl+X Ctrl+S", onSendNow)()
+            item("Stop", "Esc") { onKeys(TerminalKeys.ESC) }()
+            item("Cancel", "Ctrl+C") { onKeys(TerminalKeys.CTRL_C) }()
+            if (claude) item("Next mode", "Shift+Tab") { onKeys(TerminalKeys.SHIFT_TAB) }()
+            item("Tab", "Tab") { onKeys(TerminalKeys.TAB) }()
+            item("Enter", "↵") { onKeys(TerminalKeys.ENTER) }()
+            // The stats overlay (heat, RAM, tokens/s) is easy to lose track of: in reach here too.
+            val stats by com.bori.app.stats.StatsPrefs.settings.collectAsState()
+            val context = androidx.compose.ui.platform.LocalContext.current
+            item(if (stats.overlay) "Hide stats" else "Show stats", "Settings → Device & heat") {
+                com.bori.app.stats.StatsPrefs.init(context)
+                com.bori.app.ui.settings.applyStatsSettings(context) { it.copy(overlay = !stats.overlay) }
+            }()
         }
     }
 }
@@ -2709,6 +2791,7 @@ private fun CliAskFallbackCard(
 private fun CliMenuCard(
     agent: String,
     menu: com.bori.app.terminal.CliStatus.Menu,
+    plan: String? = null,
     onPick: (Int) -> Unit,
     onAnswerText: (Int, String) -> Unit,
     onBack: () -> Unit,
@@ -2737,6 +2820,18 @@ private fun CliMenuCard(
                     maxLines = 6,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            plan?.let { text ->
+                // Claude Code's "Ready to code?": the plan itself, so it can be read here before saying yes.
+                var open by remember(text) { mutableStateOf(false) }
+                Text(
+                    text.trim(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = notice.text,
+                    maxLines = if (open) Int.MAX_VALUE else 8,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                TextButton(onClick = { open = !open }) { Text(if (open) "Show less" else "Show the whole plan") }
             }
             Text(menu.question, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = notice.text)
             menu.options.forEach { o ->

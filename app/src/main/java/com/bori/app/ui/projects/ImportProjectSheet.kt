@@ -1,5 +1,7 @@
 ﻿package com.bori.app.ui.projects
 
+import com.bori.theme.components.crystalSwitchColors
+import com.bori.theme.components.crystalTextFieldColors
 import com.bori.theme.components.crystalSegmentedButtonColors
 import com.bori.theme.util.BoriSheet
 import android.net.Uri
@@ -118,7 +120,7 @@ private fun GitHubTab(
         placeholder = { Text("https://github.com/owner/repo") },
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
-        enabled = !isLoading,
+        enabled = !isLoading, colors = crystalTextFieldColors()
     )
 
     Row(
@@ -127,7 +129,7 @@ private fun GitHubTab(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text("Private repository", style = MaterialTheme.typography.bodyMedium)
-        Switch(checked = privateRepo, onCheckedChange = { privateRepo = it }, enabled = !isLoading)
+        Switch(checked = privateRepo, onCheckedChange = { privateRepo = it }, enabled = !isLoading, colors = crystalSwitchColors())
     }
 
     if (privateRepo) {
@@ -139,7 +141,7 @@ private fun GitHubTab(
             singleLine = true,
             enabled = !isLoading,
             visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), colors = crystalTextFieldColors()
         )
     }
 

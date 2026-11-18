@@ -47,7 +47,10 @@ object CliStatus {
     private val INLINE_OPTION = Regex("type something|something else|^other\\b", RegexOption.IGNORE_CASE)
     /** The tab row of a multi-question form: "← ☐ Bugs  ☐ Next  ✔ Submit →". */
     private val STEPS = Regex("[☐☒✔✓].*\\bSubmit\\b|\\bSubmit\\b.*→")
-    private val FOOTER = Regex("esc to cancel|enter to (select|confirm)|to navigate|tab to amend|ctrl\\+\\w+ to ", RegexOption.IGNORE_CASE)
+    private val FOOTER = Regex("esc to cancel|enter to (select|confirm)|to navigate|tab to amend|ctrl\\+\\w+ to |shift\\+tab to approve", RegexOption.IGNORE_CASE)
+
+    /** How many screen lines a wrapped key hint can take. */
+    private const val FOOTER_WRAP_LINES = 3
     private val BORDER_CHARS = "│┃║╭╮╰╯─━═┌┐└┘├┤▐▌"
 
     /** Claude Code's mode line under its input ("⏸ plan mode on (shift+tab to cycle)"). */
@@ -124,6 +127,17 @@ object CliStatus {
     private const val STEPS_SCAN = 8
     private const val QUESTION_LINES = 4
 
+    /** Claude Code's plan file named under its "Ready to code?" menu ("ctrl+g to edit in Vim · ~/.claude/plans/x.md"). */
+    private val PLAN_PATH = Regex("~/\\.claude/plans/[\\w.-]+\\.md")
+
+    /** The plan file the ExitPlanMode menu on screen is about, or null (also when the path wrapped mid-name). */
+    fun planPath(lines: List<String>): String? {
+        val tail = lines.map(::clean).filter { it.isNotEmpty() }.takeLast(PLAN_SCAN)
+        return PLAN_PATH.find(tail.joinToString(" "))?.value ?: PLAN_PATH.find(tail.joinToString(""))?.value
+    }
+
+    private const val PLAN_SCAN = 6
+
     /** Strips a TUI box's side borders and padding from one screen line. */
     fun clean(line: String): String = line.trim().trim { it in BORDER_CHARS || it.isWhitespace() }
 
@@ -177,9 +191,21 @@ object CliStatus {
      */
     fun menu(lines: List<String>): Menu? {
         val rows = lines.map(::clean)
-        // Skip blank lines and key hints at the very bottom.
+        // Skip blank lines and key hints at the very bottom. A hint the terminal wrapped ("ctrl+g to
+        // edit in Vim · ~/.claude/plans/….md" on a narrow screen) is skipped as a whole block: its
+        // second half matches nothing and used to end the menu scan (ExitPlanMode, Fold 2026-11-17).
         var end = rows.size - 1
-        while (end >= 0 && (rows[end].isEmpty() || FOOTER.containsMatchIn(rows[end]))) end--
+        while (end >= 0) {
+            if (rows[end].isEmpty() || FOOTER.containsMatchIn(rows[end])) { end--; continue }
+            var top = end
+            while (top - 1 >= 0 && rows[top - 1].isNotEmpty() && end - top < FOOTER_WRAP_LINES - 1) top--
+            val block = rows.subList(top, end + 1)
+            if (block.any { FOOTER.containsMatchIn(it) } && block.none { OPTION.containsMatchIn(it) }) {
+                end = top - 1
+                continue
+            }
+            break
+        }
         if (end < 0) return null
         val canCancel = rows.drop(end + 1).any { it.contains("esc to cancel", ignoreCase = true) } ||
             rows.subList(0, end + 1).takeLast(3).any { it.contains("esc to cancel", ignoreCase = true) }

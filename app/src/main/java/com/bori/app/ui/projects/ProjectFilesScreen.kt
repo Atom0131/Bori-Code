@@ -1,5 +1,6 @@
 package com.bori.app.ui.projects
 
+import com.bori.theme.components.crystalTextFieldColors
 import com.bori.theme.util.BoriAlertDialog
 import com.bori.theme.util.BoriDropdownMenu
 import com.bori.theme.components.crystalScaffoldContentColor
@@ -380,7 +381,7 @@ fun ProjectFilesScreen(
                     onDismissRequest = { action = null },
                     title = { Text(if (kind == FileAction.RENAME) "Rename" else "New folder") },
                     text = {
-                        OutlinedTextField(value = nameInput, onValueChange = { nameInput = it }, singleLine = true)
+                        OutlinedTextField(value = nameInput, onValueChange = { nameInput = it }, singleLine = true, colors = crystalTextFieldColors())
                     },
                     confirmButton = {
                         TextButton(

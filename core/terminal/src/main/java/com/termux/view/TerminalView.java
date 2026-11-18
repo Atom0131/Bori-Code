@@ -45,6 +45,10 @@ import com.termux.view.textselection.TextSelectionCursorController;
 /** View displaying and interacting with a {@link TerminalSession}. */
 public final class TerminalView extends View {
 
+    /** Narrowest the session is made, whatever the view's width (see updateSize). */
+    public static final int MIN_COLUMNS = 60;
+
+
     /** Log terminal view key and IME events. */
     private static boolean TERMINAL_VIEW_KEY_LOGGING_ENABLED = false;
 
@@ -972,8 +976,11 @@ public final class TerminalView extends View {
         int viewHeight = getHeight();
         if (viewWidth == 0 || viewHeight == 0 || mTermSession == null) return;
 
-        // Set to 80 and 24 if you want to enable vttest.
-        int newColumns = Math.max(4, (int) (viewWidth / mRenderer.mFontWidth));
+        // Bori Code: never narrower than MIN_COLUMNS. Dragging the split
+        // divider used to resize the session down to a few columns, and that size stuck once the pane
+        // was hidden; the coding CLIs then drew every line wrapped, so Chat could no longer read their
+        // menus (Fold, 2026-11-17). A pane narrower than this shows the left part, clipped.
+        int newColumns = Math.max(MIN_COLUMNS, (int) (viewWidth / mRenderer.mFontWidth));
         int newRows = Math.max(4, (viewHeight - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing);
 
         if (mEmulator == null || (newColumns != mEmulator.mColumns || newRows != mEmulator.mRows)) {

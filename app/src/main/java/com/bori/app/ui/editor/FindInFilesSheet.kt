@@ -1,5 +1,7 @@
 ﻿package com.bori.app.ui.editor
 
+import com.bori.theme.components.crystalFilterChipColors
+import com.bori.theme.components.crystalTextFieldColors
 import com.bori.theme.util.BoriSheet
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -88,7 +90,7 @@ fun FindInFilesSheet(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(
                     onSearch = { viewModel.search(query, caseSensitive, useRegex) },
-                ),
+                ), colors = crystalTextFieldColors()
             )
 
             Row(
@@ -101,7 +103,7 @@ fun FindInFilesSheet(
                         caseSensitive = !caseSensitive
                         if (query.isNotBlank()) viewModel.search(query, caseSensitive, useRegex)
                     },
-                    label = { Text("Aa") },
+                    label = { Text("Aa") }, colors = crystalFilterChipColors()
                 )
                 FilterChip(
                     selected = useRegex,
@@ -109,7 +111,7 @@ fun FindInFilesSheet(
                         useRegex = !useRegex
                         if (query.isNotBlank()) viewModel.search(query, caseSensitive, useRegex)
                     },
-                    label = { Text(".*") },
+                    label = { Text(".*") }, colors = crystalFilterChipColors()
                 )
                 if (results.isNotEmpty()) {
                     val total = results.sumOf { it.matches.size }

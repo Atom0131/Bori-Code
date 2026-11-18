@@ -14,6 +14,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.semantics.Role
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -42,7 +43,7 @@ import com.bori.theme.components.crystalSwitchColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** Settings → Appearance → Stats: what the stats overlay and the notification show. */
+/** Settings → Device & heat → Stats: what the stats overlay and the notification show. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StatsSection() {
@@ -154,5 +155,63 @@ private fun SwitchRow(title: String, detail: String, checked: Boolean, onChange:
         }
         Spacer(Modifier.width(12.dp))
         Switch(checked = checked, onCheckedChange = null, colors = crystalSwitchColors())
+    }
+}
+
+/** Settings → Device & heat → Heat: how Bori Code and the agents react to a hot phone. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun HeatSection() {
+    val context = LocalContext.current
+    LaunchedEffect(Unit) { com.bori.app.terminal.HeatPrefs.init(context) }
+    val h by com.bori.app.terminal.HeatPrefs.settings.collectAsStateWithLifecycle()
+    var reading by remember { mutableStateOf<com.bori.app.terminal.DeviceHeat.Reading?>(null) }
+    LaunchedEffect(Unit) { reading = withContext(Dispatchers.IO) { runCatching { com.bori.app.terminal.DeviceHeat.read(context) }.getOrNull() } }
+    fun set(change: (com.bori.app.terminal.HeatSettings) -> com.bori.app.terminal.HeatSettings) =
+        com.bori.app.terminal.HeatPrefs.update(change)
+    val summary = listOfNotNull(
+        if (h.alerts) "Alert at ${h.batteryC} °C" else "No alerts",
+        if (h.tellAgents) "agents told" else null,
+        if (h.pauseAutoEnter) "auto-enter pauses" else null,
+    ).joinToString(" · ")
+    CollapsibleSection(title = "Heat", summary = summary, icon = Icons.Default.Thermostat) {
+        reading?.let { r ->
+            Text(
+                "Now: battery ${"%.1f".format(java.util.Locale.US, r.batteryTempC)} °C, Android heat level ${r.thermalName}" +
+                    if (r.hot) " (hot)" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (r.hot) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+        }
+        SwitchRow(
+            "Tell the agents",
+            "Claude Code and the others read the phone's heat and battery (bori-device) and pace long jobs. " +
+                "Works while a Linux tab is open.",
+            h.tellAgents,
+        ) { on -> set { it.copy(tellAgents = on) } }
+        SwitchRow("Hot-phone notification", "When the phone is hot while an agent works.", h.alerts) { on -> set { it.copy(alerts = on) } }
+        Text("Hot at (battery)", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            com.bori.app.terminal.HeatSettings.BATTERY_CHOICES.forEach { c ->
+                FilterChip(selected = h.batteryC == c, onClick = { set { it.copy(batteryC = c) } }, label = { Text("$c °C") }, colors = crystalFilterChipColors())
+            }
+        }
+        Text(
+            "Android's own \"severe\" heat level always counts as hot.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text("Remind me at most every", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            com.bori.app.terminal.HeatSettings.MINUTE_CHOICES.forEach { m ->
+                FilterChip(selected = h.alertMinutes == m, onClick = { set { it.copy(alertMinutes = m) } }, label = { Text("$m min") }, colors = crystalFilterChipColors())
+            }
+        }
+        SwitchRow(
+            "Pause auto-enter when hot",
+            "Turns auto-enter off in every tab, so the agent stops at its next question until you're back.",
+            h.pauseAutoEnter,
+        ) { on -> set { it.copy(pauseAutoEnter = on) } }
     }
 }

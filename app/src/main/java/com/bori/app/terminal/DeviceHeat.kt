@@ -30,8 +30,8 @@ object DeviceHeat {
     ) {
         val thermalName: String get() = THERMAL_NAMES.getOrNull(thermalStatus) ?: "unknown"
 
-        /** Hot enough to pause a long job: Android's "severe" or worse, or a battery at 45 °C. */
-        val hot: Boolean get() = thermalStatus >= SEVERE || batteryTempC >= 45f
+        /** Hot enough to pause a long job: Android's "severe" or worse, or the battery at the chosen °C (45). */
+        val hot: Boolean get() = thermalStatus >= SEVERE || batteryTempC >= HeatPrefs.settings.value.batteryC
 
         /** The `bori-device` file: plain `key=value` lines the guest script sources. */
         fun toShell(nowSeconds: Long): String = buildString {

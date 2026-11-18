@@ -1,5 +1,6 @@
 package com.bori.app.ui.editor
 
+import com.bori.theme.components.crystalTextFieldColors
 import com.bori.app.ui.common.GlassCard
 import com.bori.theme.components.isCrystal
 import com.bori.theme.components.crystalChromeSurface
@@ -294,7 +295,7 @@ fun EditorScreen(
                             value = inputDialogValue,
                             onValueChange = { inputDialogValue = it },
                             label = { Text("Name") },
-                            singleLine = true,
+                            singleLine = true, colors = crystalTextFieldColors()
                         )
                     },
                     confirmButton = {
@@ -325,7 +326,7 @@ fun EditorScreen(
                             value = inputDialogValue,
                             onValueChange = { inputDialogValue = it },
                             label = { Text("New name") },
-                            singleLine = true,
+                            singleLine = true, colors = crystalTextFieldColors()
                         )
                     },
                     confirmButton = {
@@ -1089,7 +1090,7 @@ private fun SearchSidebarPanel(
             singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(8.dp),
+                .padding(8.dp), colors = crystalTextFieldColors()
         )
         HorizontalDivider()
         if (isSearching) {

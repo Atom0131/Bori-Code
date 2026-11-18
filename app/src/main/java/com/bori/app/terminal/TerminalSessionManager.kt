@@ -169,10 +169,16 @@ class TerminalSessionManager @Inject constructor(
                 detail = runCatching { stopFailureText(JSONObject(json)) }.getOrNull()
                 AgentState.ERROR
             }
+            // PermissionRequest / PreToolUse(ExitPlanMode, AskUserQuestion): a question is going up now.
+            "waiting" -> AgentState.WAITING
             "notify" -> {
-                detail = runCatching { JSONObject(json).optString("message") }.getOrNull()?.ifBlank { null }
-                // The other notification is "waiting for your input" a minute after a turn: nothing new.
-                if (detail?.contains("permission", ignoreCase = true) == true) AgentState.WAITING else return
+                val o = runCatching { JSONObject(json) }.getOrNull()
+                detail = o?.optString("message")?.ifBlank { null }
+                val type = o?.optString("notification_type").orEmpty()
+                // The other notification is "waiting for your input" (idle_prompt) a minute after a turn: nothing new.
+                if (type == "permission_prompt" || type == "elicitation_dialog" ||
+                    detail?.contains("permission", ignoreCase = true) == true
+                ) AgentState.WAITING else return
             }
             else -> return
         }
@@ -375,9 +381,11 @@ class TerminalSessionManager @Inject constructor(
             val file = linux.deviceStatusFile()
             if (!linuxOpen || file == null) { heatTicking = false; return }
             val now = System.currentTimeMillis()
+            val heat = HeatPrefs.init(context).settings.value
             Thread({
                 val reading = runCatching { DeviceHeat.read(context) }.getOrNull() ?: return@Thread
-                runCatching {
+                // Turned off in Settings: the agents find no reading and carry on as on a PC.
+                if (!heat.tellAgents) runCatching { file.delete() } else runCatching {
                     file.parentFile?.mkdirs()
                     val tmp = File(file.parentFile, file.name + ".tmp")
                     tmp.writeText(reading.toShell(now / 1000))
@@ -390,9 +398,14 @@ class TerminalSessionManager @Inject constructor(
     }
 
     private fun heatAlert(reading: DeviceHeat.Reading, now: Long) {
-        if (now - lastHeatAlert < HEAT_ALERT_MS) return
+        val heat = HeatPrefs.settings.value
+        if (now - lastHeatAlert < heat.alertMinutes * 60_000L) return
         val working = _tabs.value.firstOrNull { !it.finished && agentStates[it.id] == AgentState.WORKING } ?: return
         lastHeatAlert = now
+        if (heat.pauseAutoEnter && autoEnters.isNotEmpty()) {
+            autoEnters.keys.toList().forEach { setAutoEnter(it, false) }
+        }
+        if (!heat.alerts) return
         StatusNotifier.alert(
             context,
             "Your phone is hot (${reading.batteryTempC.toInt()} °C)",
@@ -574,6 +587,20 @@ class TerminalSessionManager @Inject constructor(
             }
         }
         main.postDelayed({ if (session.isRunning) session.write("\r") }, if (text.isEmpty()) 0L else ENTER_DELAY_MS)
+    }
+
+    /**
+     * Types [text] into tab [tabId] (a paste if it has line breaks), then [keys] a moment later, so the
+     * CLI reads them as key presses after the text: Claude Code's "send now" is text + Ctrl+X Ctrl+S.
+     */
+    fun typeThenKeys(tabId: Int, text: String, keys: String) {
+        val session = _tabs.value.firstOrNull { it.id == tabId && !it.finished }?.session ?: return
+        main.post {
+            if (session.isRunning) {
+                if ('\n' in text) session.emulator?.paste(text) else if (text.isNotEmpty()) session.write(text)
+            }
+        }
+        main.postDelayed({ if (session.isRunning) session.write(keys) }, if (text.isEmpty()) 0L else ENTER_DELAY_MS)
     }
 
     /** Shows tab [id] in the focused pane, or focuses the pane already showing it. */

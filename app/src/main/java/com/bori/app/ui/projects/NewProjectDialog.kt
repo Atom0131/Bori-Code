@@ -1,5 +1,10 @@
 ﻿package com.bori.app.ui.projects
 
+import androidx.compose.material3.MaterialTheme
+import com.bori.theme.components.crystalMenuContainerColor
+import com.bori.theme.components.crystalMenuField
+import com.bori.theme.components.crystalFilterChipColors
+import com.bori.theme.components.crystalTextFieldColors
 import com.bori.theme.util.BoriAlertDialog
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -64,7 +69,7 @@ fun NewProjectDialog(
                     label = { Text("App Name") },
                     isError = nameError && name.isNotEmpty(),
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth(), colors = crystalTextFieldColors()
                 )
 
                 OutlinedTextField(
@@ -76,7 +81,7 @@ fun NewProjectDialog(
                         { Text("Must be like com.example.myapp") }
                     } else null,
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth(), colors = crystalTextFieldColors()
                 )
 
                 // Min SDK picker
@@ -92,11 +97,11 @@ fun NewProjectDialog(
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(sdkDropdownExpanded) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable), colors = crystalTextFieldColors()
                     )
                     ExposedDropdownMenu(
                         expanded = sdkDropdownExpanded,
-                        onDismissRequest = { sdkDropdownExpanded = false },
+                        onDismissRequest = { sdkDropdownExpanded = false }, containerColor = crystalMenuContainerColor(MaterialTheme.colorScheme.surfaceContainer), modifier = Modifier.crystalMenuField()
                     ) {
                         MIN_SDK_OPTIONS.forEach { sdk ->
                             DropdownMenuItem(
@@ -152,6 +157,6 @@ private fun TemplateChip(
     FilterChip(
         selected = selected,
         onClick = onClick,
-        label = { Text(label) },
+        label = { Text(label) }, colors = crystalFilterChipColors()
     )
 }

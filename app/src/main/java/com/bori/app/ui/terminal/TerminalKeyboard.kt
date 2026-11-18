@@ -1,5 +1,6 @@
 package com.bori.app.ui.terminal
 
+import com.bori.theme.components.crystalSwitchColors
 import com.bori.theme.components.crystalSegmentedButtonColors
 import com.bori.theme.util.BoriSheet
 import android.graphics.drawable.GradientDrawable
@@ -397,7 +398,7 @@ private fun KeysSettingsSheet(
 
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 Text("Number row", modifier = Modifier.weight(1f))
-                Switch(s.numberRow, { update(s.copy(numberRow = it)); onDone(s.copy(numberRow = it)) })
+                Switch(s.numberRow, { update(s.copy(numberRow = it)); onDone(s.copy(numberRow = it)) }, colors = crystalSwitchColors())
             }
 
             SettingLabel("Language", null)

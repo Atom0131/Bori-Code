@@ -1,5 +1,6 @@
 package com.bori.app.ui.editor
 
+import com.bori.theme.components.crystalTextFieldColors
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import com.bori.theme.components.crystalScaffoldColor
@@ -114,7 +115,7 @@ fun QuickOpenDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(12.dp)
-                        .focusRequester(focusRequester),
+                        .focusRequester(focusRequester), colors = crystalTextFieldColors()
                 )
 
                 HorizontalDivider()

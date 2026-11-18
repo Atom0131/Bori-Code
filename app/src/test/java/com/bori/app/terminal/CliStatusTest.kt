@@ -289,4 +289,58 @@ class CliStatusTest {
         assertNull(CliStatus.parse(listOf("Downloading gradle…", "$ ")))
         assertNull(CliStatus.agyActivity(listOf("● Done. Your build is ready.", "> ")))
     }
+
+    /** Claude Code's ExitPlanMode prompt (Fold, 2026-11-17): the terminal showed it, Chat said "working". */
+    private val planWide = """
+         ────────────────────────────────────────────────────────────────────────
+         Ready to code?
+
+         Here is Claude's plan:
+         - A flat celeste field #4FB4F2.
+         ────────────────────────────────────────────────────────────────────────
+         Claude has written up a plan and is ready to execute. Would you like to proceed?
+
+         ❯ 1. Yes, and use auto mode
+           2. Yes, manually approve edits
+           3. Tell Claude what to change
+              shift+tab to approve with this feedback
+
+         ctrl+g to edit in Vim · ~/.claude/plans/gentle-weaving-wren.md
+        """
+
+    /** The same at 60 columns: the question and the footer wrap onto extra lines. */
+    private val planNarrow = """
+         Claude has written up a plan and is ready to execute.
+         Would you like to proceed?
+
+         ❯ 1. Yes, and use auto mode
+           2. Yes, manually approve edits
+           3. Tell Claude what to change
+              shift+tab to approve with this feedback
+
+         ctrl+g to edit in Vim ·
+         ~/.claude/plans/gentle-weaving-wren.md
+        """
+
+    @Test fun exitPlanModeMenuWide() {
+        val m = CliStatus.menu(screen(planWide))!!
+        assertEquals(listOf("Yes, and use auto mode", "Yes, manually approve edits", "Tell Claude what to change"), m.options.map { it.label })
+        assertTrue(m.options[0].selected)
+        assertTrue(m.question.contains("ready to execute"))
+    }
+
+    @Test fun exitPlanModeMenuWrappedFooter() {
+        val m = CliStatus.menu(screen(planNarrow))!!
+        assertEquals(3, m.options.size)
+        assertEquals("Claude has written up a plan and is ready to execute. Would you like to proceed?", m.question)
+    }
+
+    @Test fun planPathFromFooter() {
+        assertEquals("~/.claude/plans/gentle-weaving-wren.md", CliStatus.planPath(screen(planWide)))
+        assertEquals("~/.claude/plans/gentle-weaving-wren.md", CliStatus.planPath(screen(planNarrow)))
+        assertNull(CliStatus.planPath(screen("""
+            ❯ 1. Yes
+              2. No
+        """)))
+    }
 }

@@ -5,6 +5,11 @@ import com.bori.theme.util.BoriAlertDialog
 import com.bori.app.ui.common.LinkGroup
 import com.bori.theme.components.crystalScaffoldContentColor
 import com.bori.theme.components.crystalScaffoldColor
+import com.bori.theme.components.crystalTileSurface
+import com.bori.theme.components.crystalTextFieldColors
+import com.bori.theme.components.crystalSwitchColors
+import com.bori.theme.components.crystalMenuField
+import com.bori.theme.components.crystalMenuContainerColor
 import com.bori.app.ui.common.ShellContentInsets
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,6 +40,7 @@ import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -236,8 +242,10 @@ fun SettingsScreen(
                             Box(
                                 modifier = Modifier
                                     .padding(horizontal = 6.dp)
-                                    .clip(MaterialTheme.shapes.medium)
-                                    .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent),
+                                    // The open page: a glass tile like the rest, not a flat tinted box inset
+                                    // into the group's glass (it read as a bar with a see-through rim).
+                                    .then(if (selected) Modifier.crystalTileSurface(MaterialTheme.colorScheme.secondaryContainer) else Modifier)
+                                    .clip(MaterialTheme.shapes.medium),
                             ) {
                                 LinkRow(c.title, c.summary, c.icon) { category = c }
                             }
@@ -342,9 +350,12 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Stats overlay and notification ───────────────────────────────
-            StatsSection()
+            }
 
+            if (shown == SettingsCategory.DEVICE) {
+            // ── Stats overlay and notification, and the heat watch ───────────
+            StatsSection()
+            HeatSection()
             }
 
             if (shown == SettingsCategory.AGENTS) {
@@ -377,7 +388,7 @@ fun SettingsScreen(
             ) {
                 Text("Get a free Tavily API key →", style = MaterialTheme.typography.bodySmall)
             }
-            OutlinedTextField(
+            OutlinedTextField(colors = crystalTextFieldColors(), 
                 value = uiState.tavilyKeyInput,
                 onValueChange = { viewModel.updateTavilyKeyInput(it) },
                 label = {
@@ -430,7 +441,7 @@ fun SettingsScreen(
                 onExpandedChange = { profileExpanded = it },
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                OutlinedTextField(
+                OutlinedTextField(colors = crystalTextFieldColors(), 
                     value = prefs.compilerPerformanceProfile.name,
                     onValueChange = {},
                     readOnly = true,
@@ -440,7 +451,7 @@ fun SettingsScreen(
                         .fillMaxWidth()
                         .menuAnchor(MenuAnchorType.PrimaryNotEditable),
                 )
-                ExposedDropdownMenu(
+                ExposedDropdownMenu(containerColor = crystalMenuContainerColor(MaterialTheme.colorScheme.surfaceContainer), modifier = Modifier.crystalMenuField(), 
                     expanded = profileExpanded,
                     onDismissRequest = { profileExpanded = false },
                 ) {
@@ -473,7 +484,7 @@ fun SettingsScreen(
                 onExpandedChange = { timeoutExpanded = it },
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                OutlinedTextField(
+                OutlinedTextField(colors = crystalTextFieldColors(), 
                     value = "${prefs.kotlinTimeoutMinutes} min",
                     onValueChange = {},
                     readOnly = true,
@@ -483,7 +494,7 @@ fun SettingsScreen(
                         .fillMaxWidth()
                         .menuAnchor(MenuAnchorType.PrimaryNotEditable),
                 )
-                ExposedDropdownMenu(
+                ExposedDropdownMenu(containerColor = crystalMenuContainerColor(MaterialTheme.colorScheme.surfaceContainer), modifier = Modifier.crystalMenuField(), 
                     expanded = timeoutExpanded,
                     onDismissRequest = { timeoutExpanded = false },
                 ) {
@@ -690,7 +701,7 @@ fun SettingsScreen(
                     )
                 }
                 Spacer(Modifier.width(12.dp))
-                Switch(
+                Switch(colors = crystalSwitchColors(), 
                     checked = prefs.experimentalFeaturesEnabled,
                     onCheckedChange = { viewModel.setExperimentalFeaturesEnabled(it) },
                 )
@@ -715,6 +726,7 @@ fun SettingsScreen(
 private enum class SettingsCategory(val title: String, val summary: String, val icon: ImageVector) {
     AGENTS("Agents & models", "API keys, chat models, usage, web search, on-device AI", Icons.Default.SmartToy),
     APPEARANCE("Appearance", "Theme style, colours and glass", Icons.Default.Palette),
+    DEVICE("Device & heat", "Stats overlay, heat alerts, what the agents are told", Icons.Default.Thermostat),
     BUILD("Build & signing", "Compiler profile, timeouts, release keystore", Icons.Default.Build),
     DATA("Backup & data", "Export, import, deleted projects", Icons.Default.Backup),
 }
@@ -751,7 +763,7 @@ private fun AiConfigSection(
             onExpandedChange = { providerExpanded = it },
             modifier = Modifier.fillMaxWidth(),
         ) {
-            OutlinedTextField(
+            OutlinedTextField(colors = crystalTextFieldColors(), 
                 value = selectedDisplayProvider.displayName,
                 onValueChange = {},
                 readOnly = true,
@@ -761,7 +773,7 @@ private fun AiConfigSection(
                     .fillMaxWidth()
                     .menuAnchor(MenuAnchorType.PrimaryNotEditable),
             )
-            ExposedDropdownMenu(
+            ExposedDropdownMenu(containerColor = crystalMenuContainerColor(MaterialTheme.colorScheme.surfaceContainer), modifier = Modifier.crystalMenuField(), 
                 expanded = providerExpanded,
                 onDismissRequest = { providerExpanded = false },
             ) {
@@ -785,7 +797,7 @@ private fun AiConfigSection(
             Spacer(Modifier.height(8.dp))
             // The local server's "key" is its URL: nothing secret, so show it and use a URL keyboard
             val isServerUrl = selectedDisplayProvider == AiProvider.LOCAL_SERVER
-            OutlinedTextField(
+            OutlinedTextField(colors = crystalTextFieldColors(), 
                 value = keyInput,
                 onValueChange = onKeyChanged,
                 modifier = Modifier.fillMaxWidth(),
@@ -905,7 +917,7 @@ private fun ProviderModelPicker(
                 .fillMaxWidth()
                 .padding(top = 4.dp),
         ) {
-            OutlinedTextField(
+            OutlinedTextField(colors = crystalTextFieldColors(), 
                 value = selectedProvider.displayName,
                 onValueChange = {},
                 readOnly = true,
@@ -915,7 +927,7 @@ private fun ProviderModelPicker(
                     .fillMaxWidth()
                     .menuAnchor(MenuAnchorType.PrimaryNotEditable),
             )
-            ExposedDropdownMenu(
+            ExposedDropdownMenu(containerColor = crystalMenuContainerColor(MaterialTheme.colorScheme.surfaceContainer), modifier = Modifier.crystalMenuField(), 
                 expanded = providerExpanded,
                 onDismissRequest = { providerExpanded = false },
             ) {
@@ -948,7 +960,7 @@ private fun ProviderModelPicker(
         val models = modelOptions[selectedProvider] ?: emptyList()
         if (models.isEmpty()) {
             // OpenRouter (or unknown): free-text
-            OutlinedTextField(
+            OutlinedTextField(colors = crystalTextFieldColors(), 
                 value = selectedModel,
                 onValueChange = onModelSelected,
                 label = { Text("Model (e.g. moonshotai/kimi-k3)") },
@@ -967,7 +979,7 @@ private fun ProviderModelPicker(
                     .fillMaxWidth()
                     .padding(top = 8.dp),
             ) {
-                OutlinedTextField(
+                OutlinedTextField(colors = crystalTextFieldColors(), 
                     value = displayModel,
                     onValueChange = {},
                     readOnly = true,
@@ -977,7 +989,7 @@ private fun ProviderModelPicker(
                         .fillMaxWidth()
                         .menuAnchor(MenuAnchorType.PrimaryNotEditable),
                 )
-                ExposedDropdownMenu(
+                ExposedDropdownMenu(containerColor = crystalMenuContainerColor(MaterialTheme.colorScheme.surfaceContainer), modifier = Modifier.crystalMenuField(), 
                     expanded = modelExpanded,
                     onDismissRequest = { modelExpanded = false },
                 ) {
@@ -1088,7 +1100,7 @@ private fun SigningSection(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text("Use custom keystore", modifier = Modifier.weight(1f))
-        Switch(checked = form.enabled, onCheckedChange = onEnabledChanged)
+        Switch(colors = crystalSwitchColors(), checked = form.enabled, onCheckedChange = onEnabledChanged)
     }
 
     if (form.enabled) {
@@ -1098,7 +1110,7 @@ private fun SigningSection(
                 .fillMaxWidth()
                 .padding(top = 8.dp),
         ) {
-            OutlinedTextField(
+            OutlinedTextField(colors = crystalTextFieldColors(), 
                 value = form.path,
                 onValueChange = onPathChanged,
                 label = { Text("Keystore path") },
@@ -1113,7 +1125,7 @@ private fun SigningSection(
             }
         }
 
-        OutlinedTextField(
+        OutlinedTextField(colors = crystalTextFieldColors(), 
             value = form.alias,
             onValueChange = onAliasChanged,
             label = { Text("Key alias") },
@@ -1123,7 +1135,7 @@ private fun SigningSection(
             singleLine = true,
         )
 
-        OutlinedTextField(
+        OutlinedTextField(colors = crystalTextFieldColors(), 
             value = form.keystorePassword,
             onValueChange = onKeystorePasswordChanged,
             label = { Text("Keystore password") },
@@ -1135,7 +1147,7 @@ private fun SigningSection(
             singleLine = true,
         )
 
-        OutlinedTextField(
+        OutlinedTextField(colors = crystalTextFieldColors(), 
             value = form.keyPassword,
             onValueChange = onKeyPasswordChanged,
             label = { Text("Key password") },
@@ -1187,7 +1199,7 @@ private fun ProviderKeySection(
             style = MaterialTheme.typography.labelLarge,
             modifier = Modifier.padding(bottom = 4.dp),
         )
-        OutlinedTextField(
+        OutlinedTextField(colors = crystalTextFieldColors(), 
             value = currentKey,
             onValueChange = onKeyChanged,
             modifier = Modifier.fillMaxWidth(),
@@ -1230,7 +1242,7 @@ private fun PasswordSetDialog(
         title = { Text("Set Backup Password") },
         text = {
             Column {
-                OutlinedTextField(
+                OutlinedTextField(colors = crystalTextFieldColors(), 
                     value = password,
                     onValueChange = { password = it },
                     label = { Text("Password") },
@@ -1245,7 +1257,7 @@ private fun PasswordSetDialog(
                     singleLine = true,
                 )
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
+                OutlinedTextField(colors = crystalTextFieldColors(), 
                     value = confirm,
                     onValueChange = { confirm = it },
                     label = { Text("Confirm password") },
@@ -1289,7 +1301,7 @@ private fun PasswordEnterDialog(
         onDismissRequest = onDismiss,
         title = { Text("Enter Backup Password") },
         text = {
-            OutlinedTextField(
+            OutlinedTextField(colors = crystalTextFieldColors(), 
                 value = password,
                 onValueChange = { password = it },
                 label = { Text("Password") },

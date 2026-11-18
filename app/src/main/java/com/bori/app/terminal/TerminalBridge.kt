@@ -5,6 +5,8 @@ import com.bori.app.service.StatusNotifier.AgentState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
@@ -65,9 +67,17 @@ class TerminalBridge @Inject constructor(
             AgentState.WAITING -> if (CliStatus.mayBeAsking(lines) && CliStatus.parse(lines) == null) {
                 "$name is asking something in the terminal: answer it with the buttons above first."
             } else { type(tabId, tab.session, text) }
-            AgentState.WORKING -> if (CliStatus.parse(lines) != null) {
+            // Claude Code queues a message typed while it works and takes it when the turn allows, the
+            // same as typing it in the terminal; Chat shows it as "Queued" until the transcript has it.
+            AgentState.WORKING -> if (CliStatus.parse(lines) == null) {
+                type(tabId, tab.session, text)
+            } else if (tab.command == "claude" || tab.agent == "Claude Code") {
+                val sameBefore = lastUserTexts[tabId].orEmpty().count { it == text.trim() }
+                queued.update { it + (tabId to (it[tabId].orEmpty() + Queued(text.trim(), sameBefore))) }
+                type(tabId, tab.session, text)
+            } else {
                 "$name is still working. Wait for it to finish, or tap Stop."
-            } else { type(tabId, tab.session, text) }
+            }
             else -> { type(tabId, tab.session, text) }
         }
     }
@@ -97,7 +107,24 @@ class TerminalBridge @Inject constructor(
         val atPrompt: Boolean = false,
         /** The tool an agent read from its transcript (Antigravity) is running: "write_file · app/Main.kt". */
         val activity: String? = null,
+        /** The plan Claude Code asks to start on (its "Ready to code?" menu), read from its plan file. */
+        val plan: String? = null,
     )
+
+    /** Plan files already read, by guest path: last-modified time and text. */
+    private val plans = HashMap<String, Pair<Long, String>>()
+
+    /** The text of plan file [guestPath] (`~/.claude/plans/x.md`) in tab [tabId]'s guest, cut to [PLAN_CHARS]. */
+    private suspend fun readPlan(tabId: Int, guestPath: String): String? = withContext(Dispatchers.IO) {
+        val home = manager.guestHome(tabId) ?: return@withContext null
+        val file = File(home, guestPath.removePrefix("~/"))
+        val modified = file.lastModified().takeIf { it > 0 } ?: return@withContext null
+        plans[guestPath]?.takeIf { it.first == modified }?.second ?: runCatching {
+            val text = file.readText().let { if (it.length > PLAN_CHARS) it.take(PLAN_CHARS) + "\n…" else it }
+            synchronized(plans) { plans[guestPath] = modified to text }
+            text
+        }.getOrNull()
+    }
 
     /** Tab [tabId]'s live status and menu, re-read from its screen a few times a second while collected. */
     fun live(tabId: Int): Flow<Live> = flow {
@@ -134,11 +161,19 @@ class TerminalBridge @Inject constructor(
                     error = error,
                     atPrompt = menu == null && status == null && CliStatus.atPrompt(lines),
                     activity = activity,
+                    plan = menu?.let { CliStatus.planPath(lines) }?.let { readPlan(tabId, it) },
                 ))
             }
             delay(LIVE_POLL_MS)
         }
     }.flowOn(Dispatchers.Main).distinctUntilChanged()
+
+    private val PLAN_CHARS = 12_000
+
+    /** Claude Code's keymap: "ctrl+x ctrl+s" (also ctrl+enter) is chat:sendNow. */
+    val SEND_NOW = "\u0018\u0013"
+    val CTRL_C = "\u0003"
+    val SHIFT_TAB = "\u001b[Z"
 
     /**
      * Picks option [number] of the menu on tab [tabId]'s screen by pressing its number. If the screen
@@ -227,7 +262,27 @@ class TerminalBridge @Inject constructor(
     fun back(tabId: Int) = manager.writeKeys(tabId, "\u001b[D")
 
     /** Esc: interrupts the agent mid-turn, or cancels the menu on screen. */
-    fun interrupt(tabId: Int) = manager.writeKeys(tabId, "\u001b")
+    /** Raw key bytes into tab [tabId] (Chat's key menu: Ctrl+C, Shift+Tab, Tab, Enter). */
+    fun keys(tabId: Int, keys: String) {
+        if (keys == CTRL_C) queued.update { it - tabId }
+        manager.writeKeys(tabId, keys)
+    }
+
+    /**
+     * Claude Code's "send now" (Ctrl+X Ctrl+S): stops what it's doing and sends [text] (typed into its
+     * box first) together with anything queued. With no text it sends the queued messages now.
+     */
+    fun sendNow(tabId: Int, text: String) {
+        queued.update { it - tabId }
+        manager.typeThenKeys(tabId, text.trim(), SEND_NOW)
+        if (text.isNotBlank()) manager.onMessageSent(tabId)
+    }
+
+    fun interrupt(tabId: Int) {
+        // Esc puts Claude Code's queued messages back in its input box: they're no longer queued.
+        queued.update { it - tabId }
+        manager.writeKeys(tabId, "\u001b")
+    }
 
     fun showInTerminal(tabId: Int) = manager.select(tabId)
 
@@ -334,8 +389,30 @@ class TerminalBridge @Inject constructor(
         return false
     }
 
-    /** The conversation in tab [tabId], as chat messages; re-read each second while collected. */
-    fun messages(tabId: Int): Flow<List<ChatMessageEntity>> = flow {
+    /** A message typed while the CLI worked; [sameBefore] = how many user turns already had this text. */
+    data class Queued(val text: String, val sameBefore: Int)
+
+    /** Messages Chat sent while the CLI was working, by tab, until its transcript shows them. */
+    private val queued = MutableStateFlow<Map<Int, List<Queued>>>(emptyMap())
+
+    /** Each tab's user turns as last read from its transcript. */
+    private val lastUserTexts = java.util.concurrent.ConcurrentHashMap<Int, List<String>>()
+
+    /**
+     * The conversation in tab [tabId], as chat messages; re-read each second while collected. Messages
+     * still queued in the CLI follow at the end, in the order they were sent (role "queued").
+     */
+    fun messages(tabId: Int): Flow<List<ChatMessageEntity>> = combine(transcript(tabId), queued) { msgs, q ->
+        val users = msgs.filter { it.role == "user" }.map { it.content.trim() }
+        lastUserTexts[tabId] = users
+        val left = q[tabId].orEmpty().filter { item -> users.count { it == item.text } <= item.sameBefore }
+        if (left.size != q[tabId].orEmpty().size) queued.update { it + (tabId to left) }
+        msgs + left.mapIndexed { i, item ->
+            ChatMessageEntity(id = -1L - i, sessionId = -1, role = "queued", content = item.text)
+        }
+    }
+
+    private fun transcript(tabId: Int): Flow<List<ChatMessageEntity>> = flow {
         emit(emptyList())
         val follower = Follower()
         while (true) {

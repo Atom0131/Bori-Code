@@ -71,4 +71,31 @@ class GuestPolicyRulesTest {
         // Already there: nothing to write.
         assertFalse(GuestPolicy.applyBoriAgySettings(s))
     }
+
+    @Test fun agyStaleEditGrantIsRemoved() {
+        val settings = org.json.JSONObject("""{"enableTerminalSandbox":false,"permissions":{"allow":["write_file(/root/workspace/)","edit_file(/root/workspace/)","command(ls)"]}}""")
+        assertTrue(GuestPolicy.applyBoriAgySettings(settings))
+        val allow = settings.getJSONObject("permissions").getJSONArray("allow")
+        assertEquals(listOf("write_file(/root/workspace/)", "command(ls)"), (0 until allow.length()).map { allow.getString(it) })
+        assertFalse(GuestPolicy.applyBoriAgySettings(settings))
+    }
+
+    @Test fun agyHookKeepsUserHooksAndIsStable() {
+        val hooks = org.json.JSONObject("""{"mine":{"Stop":[{"command":"echo hi"}]}}""")
+        assertTrue(GuestPolicy.agyHooks(hooks))
+        assertFalse(GuestPolicy.agyHooks(hooks))
+        assertTrue(hooks.has("mine"))
+        val groups = hooks.getJSONObject(GuestPolicy.AGY_HOOK_NAME).getJSONArray("PreToolUse")
+        assertEquals(GuestPolicy.AGY_EDIT_TOOLS, (0 until groups.length()).map { groups.getJSONObject(it).getString("matcher") })
+    }
+
+    @Test fun agyEditDecisionStaysInTheProjects() {
+        assertEquals("allow", GuestPolicy.agyEditDecision("/root/workspace/My App/app/A.kt"))
+        assertEquals("allow", GuestPolicy.agyEditDecision("\"/root/workspace/x/B.kt"))
+        assertEquals("allow", GuestPolicy.agyEditDecision("/root/.gemini/antigravity-cli/brain/abc/task.md"))
+        assertEquals("ask", GuestPolicy.agyEditDecision("/root/.bashrc"))
+        assertEquals("ask", GuestPolicy.agyEditDecision("/root/workspace/../.bashrc"))
+        assertEquals("ask", GuestPolicy.agyEditDecision("/root/workspace"))
+        assertEquals("ask", GuestPolicy.agyEditDecision(""))
+    }
 }

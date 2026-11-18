@@ -1,5 +1,6 @@
 ﻿package com.bori.app.ui.git
 
+import com.bori.theme.components.crystalTextFieldColors
 import com.bori.app.ui.common.GlassCard
 import com.bori.app.ui.common.BoriTopBar
 import com.bori.theme.components.crystalScaffoldContentColor
@@ -198,7 +199,7 @@ fun GitScreen(
                             onValueChange = { viewModel.setCommitMessage(it) },
                             label = { Text("Message") },
                             modifier = Modifier.fillMaxWidth(),
-                            maxLines = 3,
+                            maxLines = 3, colors = crystalTextFieldColors()
                         )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -209,7 +210,7 @@ fun GitScreen(
                                 onValueChange = { viewModel.setAuthorName(it) },
                                 label = { Text("Name") },
                                 modifier = Modifier.weight(1f),
-                                singleLine = true,
+                                singleLine = true, colors = crystalTextFieldColors()
                             )
                             OutlinedTextField(
                                 value = state.authorEmail,
@@ -217,7 +218,7 @@ fun GitScreen(
                                 label = { Text("Email") },
                                 modifier = Modifier.weight(1f),
                                 singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email), colors = crystalTextFieldColors()
                             )
                         }
                         Button(
@@ -243,14 +244,14 @@ fun GitScreen(
                             label = { Text("Remote URL") },
                             placeholder = { Text("https://github.com/user/repo.git") },
                             modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
+                            singleLine = true, colors = crystalTextFieldColors()
                         )
                         OutlinedTextField(
                             value = state.username,
                             onValueChange = { viewModel.setUsername(it) },
                             label = { Text("Username") },
                             modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
+                            singleLine = true, colors = crystalTextFieldColors()
                         )
                         OutlinedTextField(
                             value = state.token,
@@ -258,7 +259,7 @@ fun GitScreen(
                             label = { Text("Token / Password") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            visualTransformation = PasswordVisualTransformation(),
+                            visualTransformation = PasswordVisualTransformation(), colors = crystalTextFieldColors()
                         )
                         Row(
                             modifier = Modifier.fillMaxWidth(),

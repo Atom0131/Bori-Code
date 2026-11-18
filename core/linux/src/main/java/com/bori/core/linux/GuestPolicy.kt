@@ -35,6 +35,7 @@ class GuestPolicy @Inject constructor(
         runCatching { mergeAntigravitySettings(rootfs) }.onFailure { Log.w(TAG, "Antigravity settings", it) }
         runCatching { writeBrowserShim(rootfs) }.onFailure { Log.w(TAG, "xdg-open shim", it) }
         runCatching { writeClipboardShim(rootfs) }.onFailure { Log.w(TAG, "Clipboard shim", it) }
+        runCatching { writeAgyHooks(rootfs) }.onFailure { Log.w(TAG, "Antigravity hooks", it) }
         runCatching { writeStatusScript(rootfs) }.onFailure { Log.w(TAG, "Status script", it) }
         runCatching { writeBenchScript(rootfs) }.onFailure { Log.w(TAG, "Bench script", it) }
         runCatching { writeNetScript(rootfs) }.onFailure { Log.w(TAG, "Network script", it) }
@@ -301,6 +302,15 @@ class GuestPolicy @Inject constructor(
                 put("PostToolUseFailure", hook("working"))
                 put("PermissionDenied", hook("working"))
                 put("Notification", hook("notify"))
+                // Claude is about to show an approval (a tool, or the plan's "Ready to code?"). Notification
+                // only comes seconds later, if at all, and its wording varies, so the plan prompt used to
+                // stay "working" in Chat (Fold, 2026-11-17). The script prints nothing: the dialog shows as usual.
+                put("PermissionRequest", hook("waiting"))
+                put("PreToolUse", JSONArray().put(JSONObject()
+                    .put("matcher", "ExitPlanMode|AskUserQuestion")
+                    .put("hooks", JSONArray().put(
+                        JSONObject().put("type", "command").put("command", "$STATUS_SCRIPT waiting").put("timeout", 5),
+                    ))))
                 put("Stop", hook("done"))
                 // The turn ended on an API error (overloaded, rate limit, network): Stop doesn't fire then.
                 put("StopFailure", hook("error"))
@@ -407,6 +417,41 @@ class GuestPolicy @Inject constructor(
         val changed = change(allow)
         if (changed.isNotEmpty()) file.writeText(settings.toPrettyJson())
         return changed
+    }
+
+    /**
+     * Antigravity's PreToolUse hook: file edits in the projects folder run at once instead of each going
+     * through its model safety judge (see [WORKSPACE_ALLOW]). Only the path is read; anything outside,
+     * or with `..` in it, gets "ask" (Antigravity's normal prompt).
+     */
+    private fun writeAgyHooks(rootfs: File) {
+        val script = File(rootfs, AGY_ALLOW_SCRIPT.removePrefix("/"))
+        script.parentFile?.mkdirs()
+        val cases = AGY_ALLOWED_PREFIXES.joinToString("|") { "'$it'*" }
+        script.writeText(
+            """
+            |#!/bin/sh
+            |# Written by Bori Code: Antigravity PreToolUse hook. Edits inside the projects folder run without
+            |# the per-edit safety check; everything else is left to Antigravity's own prompt.
+            |p=${'$'}(tr -d '\n' | sed -n 's/.*"Path"[[:space:]]*:[[:space:]]*"\(\\"\)\{0,1\}\([^"\\]*\).*/\2/p')
+            |case "${'$'}p" in
+            |  */../*|*/..) ;;
+            |  $cases) echo '{"decision":"allow","reason":"Bori Code: project file"}'; exit 0 ;;
+            |esac
+            |echo '{"decision":"ask"}'
+            |""".trimMargin(),
+        )
+        script.setExecutable(true, false)
+        val file = File(rootfs, "root/.gemini/config/hooks.json")
+        val hooks = if (file.isFile) {
+            runCatching { JSONObject(file.readText().ifBlank { "{}" }) }.getOrNull() ?: return
+        } else {
+            JSONObject()
+        }
+        if (agyHooks(hooks) || !file.isFile) {
+            file.parentFile?.mkdirs()
+            file.writeText(hooks.toPrettyJson())
+        }
     }
 
     /** `xdg-open URL` inside the guest hands the URL to Bori Code, which opens it in Android's browser. */
@@ -603,11 +648,18 @@ class GuestPolicy @Inject constructor(
          * Antigravity's safety check, an extra model call and a confirmation that auto-enter (or the
          * user) answered: about 1.5 s per edit, 600 times in one afternoon (Fold, 2026-11-13). Rules
          * match by path prefix; commands still ask, and the deny rules still win.
+         *
+         * Only `write_file` is a grant action. `edit_file(...)` was rejected as "unknown action" on every
+         * check (278 times in one session) and edits fell through to the model safety judge
+         * (`unsupported_tool: edit_file`, ~400 judged calls a session; Fold, 2026-11-17). Edits are
+         * allowed by the [AGY_ALLOW_SCRIPT] PreToolUse hook instead ([agyHooks]).
          */
         val WORKSPACE_ALLOW = listOf(
             "write_file(${ProotLauncher.GUEST_WORKSPACE}/)",
-            "edit_file(${ProotLauncher.GUEST_WORKSPACE}/)",
         )
+
+        /** Allow rules Bori Code wrote before and takes back out: Antigravity rejects them. */
+        private val STALE_ALLOW = setOf("edit_file(${ProotLauncher.GUEST_WORKSPACE}/)")
 
         /** Puts the sandbox switch and [WORKSPACE_ALLOW] into [settings]; true if anything changed. */
         fun applyBoriAgySettings(settings: JSONObject): Boolean {
@@ -615,11 +667,58 @@ class GuestPolicy @Inject constructor(
             if (sandboxOffMissing(settings)) { settings.put("enableTerminalSandbox", false); changed = true }
             val permissions = settings.optJSONObject("permissions") ?: JSONObject().also { settings.put("permissions", it) }
             val allow = permissions.optJSONArray("allow") ?: JSONArray().also { permissions.put("allow", it) }
+            for (i in allow.length() - 1 downTo 0) {
+                if (allow.optString(i) in STALE_ALLOW) { allow.remove(i); changed = true }
+            }
             for (rule in WORKSPACE_ALLOW) {
                 if ((0 until allow.length()).none { allow.optString(it) == rule }) { allow.put(rule); changed = true }
             }
             return changed
         }
+
+        const val AGY_ALLOW_SCRIPT = "/usr/local/bin/bori-agy-allow"
+
+        /** Key of Bori Code's entry in Antigravity's global `~/.gemini/config/hooks.json`. */
+        const val AGY_HOOK_NAME = "bori-code-project-edits"
+
+        /** Antigravity's file-writing tools, as its transcripts name them. */
+        val AGY_EDIT_TOOLS = listOf("edit_file", "write_file", "replace_file_content", "multi_replace_file_content")
+
+        /**
+         * Puts Bori Code's PreToolUse hook into Antigravity's [hooks] (its global hooks.json), one matcher
+         * group per edit tool, keeping the user's own hooks. True if anything changed.
+         */
+        fun agyHooks(hooks: JSONObject): Boolean {
+            val groups = JSONArray()
+            AGY_EDIT_TOOLS.forEach { tool ->
+                groups.put(JSONObject()
+                    .put("matcher", tool)
+                    .put("hooks", JSONArray().put(JSONObject()
+                        .put("type", "command")
+                        .put("command", AGY_ALLOW_SCRIPT)
+                        .put("timeout", 5))))
+            }
+            val entry = JSONObject().put("PreToolUse", groups)
+            if (hooks.optJSONObject(AGY_HOOK_NAME)?.toString() == entry.toString()) return false
+            hooks.put(AGY_HOOK_NAME, entry)
+            return true
+        }
+
+        /**
+         * The hook's decision for a tool call's file [path] (Antigravity sometimes JSON-quotes it twice):
+         * allow inside the projects folder and Antigravity's own `brain/` artifacts, ask anywhere else.
+         * Mirrors [AGY_ALLOW_SCRIPT]'s shell `case`, so tests can check the rule.
+         */
+        fun agyEditDecision(path: String): String {
+            val p = path.trim().removePrefix("\\\"").removePrefix("\"")
+            if ("/../" in p || p.endsWith("/..")) return "ask"
+            return if (AGY_ALLOWED_PREFIXES.any { p.startsWith(it) }) "allow" else "ask"
+        }
+
+        val AGY_ALLOWED_PREFIXES = listOf(
+            "${ProotLauncher.GUEST_WORKSPACE}/",
+            "/root/.gemini/antigravity-cli/brain/",
+        )
 
         fun claudeDenyRules(): List<String> = buildList {
             listOf("bin", "etc", "home", "lib", "media", "mnt", "opt", "run", "sbin", "srv", "usr", "var")

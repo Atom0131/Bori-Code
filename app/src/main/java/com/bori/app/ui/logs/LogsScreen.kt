@@ -1,5 +1,6 @@
 ﻿package com.bori.app.ui.logs
 
+import com.bori.theme.components.crystalFilterChipColors
 import com.bori.app.ui.common.GlassCard
 import com.bori.app.ui.common.BoriTopBar
 import com.bori.theme.components.crystalScaffoldContentColor
@@ -179,7 +180,7 @@ fun LogsScreen(
                                     LogFilter.ERRORS -> "Errors"
                                 }
                             )
-                        },
+                        }, colors = crystalFilterChipColors()
                     )
                 }
             }

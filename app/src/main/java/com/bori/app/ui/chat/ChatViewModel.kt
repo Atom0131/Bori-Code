@@ -235,6 +235,12 @@ class ChatViewModel @Inject constructor(
     /** ← in the terminal CLI's multi-question form: back to the previous question. */
     fun backTerminal() { terminalTarget.value?.let { terminalBridge.back(it.tabId) } }
 
+    /** A key from Chat's key menu (Ctrl+C, Shift+Tab, …) into the chosen terminal tab. */
+    fun terminalKeys(keys: String) { terminalTarget.value?.let { terminalBridge.keys(it.tabId, keys) } }
+
+    /** Claude Code's "send now": [text] goes in at once, cutting into what it's doing. */
+    fun sendNowTerminal(text: String) { terminalTarget.value?.let { terminalBridge.sendNow(it.tabId, text) } }
+
     /** Yes on the plain approval card (the CLI asks, but its menu couldn't be read). */
     fun approveTerminal() = answerOnce { terminalBridge.approve(it) }
 

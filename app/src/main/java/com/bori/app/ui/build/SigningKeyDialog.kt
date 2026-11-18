@@ -1,5 +1,6 @@
 package com.bori.app.ui.build
 
+import com.bori.theme.components.crystalTextFieldColors
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
@@ -97,20 +98,20 @@ fun CreateSigningKeyDialog(
                         "On Google Play it's your upload key.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                OutlinedTextField(name, { name = it; error = null }, label = { Text("Key name") }, singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),  enabled = !working, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(owner, { owner = it; error = null }, label = { Text("Your name") }, singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),  enabled = !working, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(organization, { organization = it }, label = { Text("Organization (optional)") }, singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),  enabled = !working, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(name, { name = it; error = null }, label = { Text("Key name") }, singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),  enabled = !working, modifier = Modifier.fillMaxWidth(), colors = crystalTextFieldColors())
+                OutlinedTextField(owner, { owner = it; error = null }, label = { Text("Your name") }, singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),  enabled = !working, modifier = Modifier.fillMaxWidth(), colors = crystalTextFieldColors())
+                OutlinedTextField(organization, { organization = it }, label = { Text("Organization (optional)") }, singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),  enabled = !working, modifier = Modifier.fillMaxWidth(), colors = crystalTextFieldColors())
                 OutlinedTextField(
                     password, { password = it; error = null }, label = { Text("Password") }, singleLine = true, enabled = !working,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth(), colors = crystalTextFieldColors()
                 )
                 OutlinedTextField(
                     again, { again = it; error = null }, label = { Text("Password again") }, singleLine = true, enabled = !working,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth(), colors = crystalTextFieldColors()
                 )
                 (error ?: problem?.takeIf { password.isNotEmpty() || again.isNotEmpty() })?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
