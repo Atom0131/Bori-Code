@@ -42,6 +42,13 @@ class BinaryDictionary private constructor(r: Reader) {
     var typos: Map<String, String> = emptyMap()
         internal set
 
+    /**
+     * Two- and three-word contexts for prediction (assets/dict/<lang>.ngram), or null when the
+     * file is missing or failed to load: then only the bigrams above are used.
+     */
+    var ngrams: NgramModel? = null
+        internal set
+
     init {
         val magic = ByteArray(4).also { r.bytes(it) }
         require(String(magic, Charsets.US_ASCII) == "BDIC") { "Not a .bdic file" }
@@ -107,6 +114,9 @@ class BinaryDictionary private constructor(r: Reader) {
 
     /** Ordinary word: not all caps (abbreviations like "GI") and no special display form. */
     fun isPlainWord(node: Int): Boolean = flags[node].toInt() and (F_ALL_CAPS or F_CUSTOM) == 0
+
+    /** Written in lowercase (not a name like "Mr" or "Theban", nor an abbreviation). */
+    fun isLowercaseWord(node: Int): Boolean = flags[node].toInt() and (F_CAP_FIRST or F_ALL_CAPS or F_CUSTOM) == 0
 
     fun child(node: Int, c: Char): Int {
         val start = first[node]
@@ -219,8 +229,8 @@ class BinaryDictionary private constructor(r: Reader) {
         }
     }
 
-    /** Little-endian reader over a stream with a small reusable chunk buffer. */
-    private class Reader(private val input: InputStream) {
+    /** Little-endian reader over a stream with a small reusable chunk buffer (also reads .ngram). */
+    internal class Reader(private val input: InputStream) {
         private val buf = ByteBuffer.allocate(CHUNK).order(ByteOrder.LITTLE_ENDIAN).also { it.limit(0) }
         private var pos = 0L
 
@@ -261,6 +271,18 @@ class BinaryDictionary private constructor(r: Reader) {
                 off += k
             }
             pos += 4L * out.size
+        }
+
+        fun longs(out: LongArray) {
+            var off = 0
+            while (off < out.size) {
+                need(8)
+                val k = minOf(buf.remaining() / 8, out.size - off)
+                buf.asLongBuffer().get(out, off, k)
+                buf.position(buf.position() + 8 * k)
+                off += k
+            }
+            pos += 8L * out.size
         }
 
         fun chars(out: CharArray) {

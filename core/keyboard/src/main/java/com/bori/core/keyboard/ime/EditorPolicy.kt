@@ -23,6 +23,11 @@ data class EditorPolicy(
     val autoCapAllowed: Boolean,
     /** IME action for the enter key, or null when enter should insert a newline. */
     val enterAction: Int?,
+    /**
+     * An email field, or a text field whose hint asks for an email, username or sign-in
+     * ("Email or phone", "Username"): saved emails and usernames show in the bar, no autocorrect.
+     */
+    val loginField: Boolean = false,
 ) {
     companion object {
         val DEFAULT = EditorPolicy(LayoutId.ALPHA, FieldVariant.TEXT, false, false, false, false, true, null)
@@ -58,8 +63,13 @@ data class EditorPolicy(
             // Filter fields (YouTube's search box is one) get suggestions and a composing word
             // like any text field, as Gboard and Samsung Keyboard do. With letters committed one
             // by one instead, YouTube's big-screen search box took the text but never drew it.
+            val hint = (info.hintText?.toString().orEmpty() + " " + info.label?.toString().orEmpty()).lowercase()
+            val loginHint = cls == InputType.TYPE_CLASS_TEXT && !password && variant == FieldVariant.TEXT &&
+                (flags and InputType.TYPE_TEXT_FLAG_MULTI_LINE) == 0 &&
+                LOGIN_HINT.containsMatchIn(hint) && !hint.contains("search")
+            val login = !password && (variant == FieldVariant.EMAIL || loginHint)
             val noSuggest = password || cls != InputType.TYPE_CLASS_TEXT ||
-                variant != FieldVariant.TEXT
+                variant != FieldVariant.TEXT || loginHint
             val appNoSuggest = (flags and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS) != 0
             val noLearning = password ||
                 (info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) != 0
@@ -80,10 +90,16 @@ data class EditorPolicy(
                 noSuggestions = noSuggest,
                 appNoSuggestions = appNoSuggest,
                 noLearning = noLearning,
-                autoCapAllowed = !password && variant == FieldVariant.TEXT && cls == InputType.TYPE_CLASS_TEXT,
+                autoCapAllowed = !password && variant == FieldVariant.TEXT && cls == InputType.TYPE_CLASS_TEXT && !loginHint,
                 enterAction = enterAction,
+                loginField = login,
             )
         }
+
+        /** Hints of sign-in name fields, English and Spanish. */
+        private val LOGIN_HINT = Regex(
+            "e-?mail|correo|user ?name|user ?id|usuario|log ?in|sign ?in|iniciar sesi|account name|nombre de cuenta",
+        )
 
         fun enterLabel(action: Int?): String = when (action) {
             EditorInfo.IME_ACTION_GO -> "Go"

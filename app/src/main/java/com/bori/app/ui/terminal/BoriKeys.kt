@@ -22,6 +22,7 @@ import com.bori.core.keyboard.layout.KeyCode
 import com.bori.core.keyboard.layout.Language
 import com.bori.core.keyboard.layout.LayoutId
 import com.bori.core.keyboard.layout.Layouts
+import com.bori.core.keyboard.learn.TouchMap
 import com.bori.core.keyboard.learn.UserStore
 import com.bori.core.keyboard.predict.Aggressiveness
 import com.bori.core.keyboard.settings.Prefs
@@ -30,6 +31,7 @@ import com.bori.core.keyboard.view.ClipboardPanelView
 import com.bori.core.keyboard.view.EmojiPanelView
 import com.bori.core.keyboard.view.InputRootView
 import com.bori.core.keyboard.view.KeyboardView
+import com.bori.core.keyboard.view.Posture
 import com.bori.core.keyboard.view.ShiftState
 
 /**
@@ -151,9 +153,13 @@ class BoriKeysController(
         root.strip.listener = session
         root.clipboard.listener = this
         root.emoji.listener = this
+        root.emoji.showGif = false
+        root.clipboard.imageFile = { clipboard.imageFile(it) }
         session.strip = root.strip
         // The terminal's own settings sheet chooses the split; never the keyboard app's prompt.
         prefs.splitAsked = true
+        // A terminal is no sign-in form: never save or offer emails/usernames.
+        prefs.rememberLogins = false
     }
 
     /** The keys are showing: begin typing into the bar (like a keyboard opening on a field). */
@@ -193,7 +199,7 @@ class BoriKeysController(
 
     /** The terminal's keyboard settings, applied to Bori Keyboard's own. */
     fun apply(s: TerminalKeysSettings) {
-        prefs.keyHeightScale = s.height
+        Posture.entries.forEach { prefs.setKeyHeightScale(it, s.height) }
         prefs.splitOnBigScreens = s.split != false
         prefs.splitGap = s.gap
         prefs.splitEdge = s.edge
@@ -244,7 +250,14 @@ class BoriKeysController(
     private fun applyKeyPrefs() {
         val k = root.keyboard
         k.keyPreviewEnabled = prefs.keyPreview
-        k.keyHeightScale = prefs.keyHeightScale
+        k.keyHeightScales = prefs.keyHeightScales()
+        // Keys follow where this thumb actually lands (learned from everyday typing).
+        val map = TouchMap.get(context)
+        k.aimShifts = if (prefs.aimKeys && prefs.touchMap) {
+            { map.shifts(Posture.of(context)) }
+        } else {
+            null
+        }
         k.heightRows = if (prefs.numberRow) 5 else 4
         k.splitOnBigScreens = prefs.splitOnBigScreens
         k.setSplitSpacing(prefs.splitGap, prefs.splitEdge)
@@ -422,15 +435,27 @@ class BoriKeysController(
 
     // ---------------------------------------------------------------- clipboard and emoji panels
 
-    override fun onClipPaste(text: String) {
+    override fun onClipPaste(clip: ClipboardHistory.Clip) {
+        // A terminal takes text only; picture clips stay in the list.
+        if (clip.isImage) return
         root.showClipboard(false)
-        session.paste(text)
+        session.paste(clip.text)
+    }
+
+    /** No search bar here: the 🔍 filters the clips by the word in the type bar. */
+    override fun onClipSearch() {
+        val word = edit.text?.toString().orEmpty().trim().substringAfterLast(' ')
+        if (word.isEmpty()) {
+            root.strip.showPrompt("Type a word in the bar, then tap 🔍", "OK", "", sticky = false) { }
+        } else {
+            root.clipboard.filter = word
+        }
     }
 
     override fun onClipLongPress(clip: ClipboardHistory.Clip) {
         val preview = clip.text.trim().replace(Regex("\\s+"), " ").take(24)
         root.strip.showPrompt("“$preview”", if (clip.pinned) "Unpin" else "Pin", "Delete", sticky = false) { pin ->
-            if (pin) clipboard.togglePin(clip.text) else clipboard.delete(clip.text)
+            if (pin) clipboard.togglePin(clip.id) else clipboard.delete(clip.id)
         }
     }
 
@@ -460,7 +485,7 @@ class BoriKeysController(
             onEmojiClose()
             return
         }
-        root.emoji.open(prefs.recentEmoji)
+        root.emoji.open(prefs.recentEmoji, prefs.emojiStyle)
         root.showEmoji(true)
     }
 
@@ -478,6 +503,8 @@ class BoriKeysController(
         feedback.onPress(DELETE_KEY)
         session.onDelete()
     }
+
+    override fun onEmojiGif() {}
 
     override fun onEmojiClose() {
         root.showEmoji(false)

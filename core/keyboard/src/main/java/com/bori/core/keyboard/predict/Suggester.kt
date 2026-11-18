@@ -1,6 +1,7 @@
 package com.bori.core.keyboard.predict
 
 import com.bori.core.keyboard.dict.BinaryDictionary
+import com.bori.core.keyboard.dict.NgramModel
 import com.bori.core.keyboard.learn.UserStore
 import java.util.Locale
 import kotlin.math.exp
@@ -44,8 +45,58 @@ class Suggester(
     private val corrector = SpellCorrector(dict)
     var blockOffensive = true
 
-    /** Context for prediction: the word before the cursor, or the start of a sentence. */
-    class Context(val prevWord: String?, val sentenceStart: Boolean) {
+    /**
+     * Conversation cache: dictionary words used in the last [CACHE_SIZE] words in this app (a
+     * cache language model). Names and topic words come back sooner. Memory only; TypingSession
+     * clears it when the app changes and feeds it only where learning is allowed.
+     */
+    private val recent = ArrayDeque<String>()
+    private val recentCount = HashMap<String, Int>()
+
+    fun noteRecent(word: String) {
+        val key = word.lowercase(locale)
+        if (dict.findWord(key) < 0) return
+        recent.addLast(key)
+        recentCount[key] = (recentCount[key] ?: 0) + 1
+        while (recent.size > CACHE_SIZE) {
+            val old = recent.removeFirst()
+            val n = (recentCount[old] ?: 1) - 1
+            if (n <= 0) recentCount.remove(old) else recentCount[old] = n
+        }
+    }
+
+    /**
+     * Next-word predictions only. Corrections don't use it (Session 45): the user felt fixes got
+     * worse after Session 40, and this was the one change typo_bench can't see, so a typo is
+     * never pulled toward a word typed a moment ago.
+     */
+    private fun cacheBoost(key: String): Float =
+        recentCount[key]?.let { CACHE_BOOST * ln(1f + it) } ?: 0f
+
+    fun clearRecent() {
+        recent.clear()
+        recentCount.clear()
+    }
+
+    /**
+     * Context for prediction: the word before the cursor, or the start of a sentence, plus up
+     * to two [earlier] words of the same sentence (oldest first) for the n-gram model.
+     * [earlierStart]: the sentence starts right before the first of them (or before [prevWord]
+     * when there are none), e.g. "I want" has prevWord "want", earlier ["i"], earlierStart.
+     */
+    class Context(
+        val prevWord: String?,
+        val sentenceStart: Boolean,
+        val earlier: List<String> = emptyList(),
+        val earlierStart: Boolean = false,
+    ) {
+        /** N-gram rows for this context, worked out once per suggestion pass. */
+        @Volatile internal var resolved: NgramModel.Resolved? = null
+        @Volatile internal var resolvedBy: NgramModel? = null
+
+        /** The word before [prevWord], for learning three-word phrases. */
+        val prev2: String? get() = earlier.lastOrNull()
+
         companion object {
             val NONE = Context(null, false)
         }
@@ -95,7 +146,12 @@ class Suggester(
         corrector.prepare(key, composer, prox)
         for (w in user.knownWords()) {
             if (dict.findWord(w) >= 0) continue
-            val boost = learnedLm(w, ctx)
+            // A learned slip ("rhe", typed before the fix existed) must never be the fix for
+            // another slip (rje → rhe). Unconfirmed learned words that are listed typos are
+            // skipped; other unconfirmed ones only win a correction by a clear margin.
+            val wConfirmed = user.isPersonal(w) || user.keptCount(w) >= 1
+            if (!wConfirmed && dict.typos.containsKey(w)) continue
+            val boost = learnedLm(w, ctx) - (if (wConfirmed) 0f else LEARNED_UNCONFIRMED_PENALTY)
             if (w.length > m && w.startsWith(key)) {
                 offer(w, boost - COMPLETION_PENALTY - COMPLETION_PER_CHAR * (w.length - m), Suggestion.Kind.COMPLETION, 0f)
             } else if (kotlin.math.abs(w.length - m) <= 2) {
@@ -159,8 +215,18 @@ class Suggester(
             if (dict.keepsAsTyped(dictNode)) return null
             return realWordFix(key, dictNode, prevNode, ctx, ranked, level)
         }
+        // A long unfinished word whose best completion clearly beats every fix ("wednes" →
+        // Wednesday, not wedges): space finishes it, as Gboard does.
+        val top = ranked.firstOrNull()
+        val bestFix = ranked.firstOrNull { it.kind != Suggestion.Kind.COMPLETION }
+        if (top != null && top.kind == Suggestion.Kind.COMPLETION && key.length >= AUTO_COMPLETE_MIN_LENGTH &&
+            level != Aggressiveness.MILD && top.cost == 0f &&
+            (bestFix == null || (top.score - bestFix.score >= AUTO_COMPLETE_MARGIN && bestFix.cost >= AUTO_COMPLETE_FIX_COST))
+        ) {
+            return top
+        }
         // Only the best-ranked correction may be applied; never fall back to a worse one.
-        val best = ranked.firstOrNull { it.kind != Suggestion.Kind.COMPLETION } ?: return null
+        val best = bestFix ?: return null
         // An unconfirmed learned word that still ranks first stays as typed.
         if (best.word.lowercase(locale) == key) return null
         val m = key.length
@@ -186,6 +252,10 @@ class Suggester(
     ): Suggestion? {
         val letters = key.count { it != '\'' }
         val apostrophes = key.length - letters
+        // Common two-letter words ("or", "of", "in") are never swapped for each other: too easy
+        // to get wrong (the typo log had "points or" → of). Single letters still are ("t" → y in
+        // Spanish); undoing one twice stops it (KEEP_AFTER).
+        if (letters == 2 && dict.freqOf(dictNode) >= REALFIX_SHORT_COMMON_FREQ) return null
         val alt = ranked.firstOrNull { s ->
             if (s.kind == Suggestion.Kind.COMPLETION || s.node < 0 || s.node == dictNode) return@firstOrNull false
             val w = s.word.lowercase(locale)
@@ -196,8 +266,11 @@ class Suggester(
         val rare = dict.freqOf(dictNode) < REALFIX_RARE_FREQ
         if (!rare && (prevNode < 0 || dict.bigramLogP(prevNode, alt.node) == null)) return null
         val margin = (if (rare) REALFIX_MARGIN_RARE else REALFIX_MARGIN_COMMON) / levelFactor(level)
-        // The typed word is judged without the user's boosts, which past slips inflate.
-        return alt.takeIf { it.score - lm(dictNode, prevNode, ctx, withUser = false) >= margin }
+        // Both words are judged without the user's boosts: past slips inflate the typed word's,
+        // and the fix's own boost alone pushed real words over the line (typo log: "hub" → huh
+        // for someone who often types "huh"; the dictionary alone puts huh only 0.2 ahead).
+        val altScore = alt.score - userBoost(dict.keyOf(alt.node), ctx)
+        return alt.takeIf { altScore - lm(dictNode, prevNode, ctx, withUser = false) >= margin }
     }
 
     // ---------------------------------------------------------------- missed spaces
@@ -258,6 +331,7 @@ class Suggester(
         fun usable(node: Int): Boolean =
             dict.freqOf(node) >= (if (dict.keyOf(node).length == 2) SPLIT_SHORT_MIN_FREQ else SPLIT_MIN_FREQ) &&
                 !dict.isOffensive(node) && dict.isPlainWord(node) &&
+                (dict.isLowercaseWord(node) || dict.keyOf(node) in capitalPieces) &&
                 !user.isBlocked(dict.keyOf(node)) &&
                 (sub.length > 1 || dict.keyOf(node) in singleLetterWords)
         var out: Piece? = null
@@ -280,6 +354,10 @@ class Suggester(
         return out
     }
 
+    /** Capitalised words that may still be a piece of a missed-space split (not "Mr", names). */
+    private val capitalPieces: Set<String> =
+        if (locale.language == "en") setOf("i", "i'm", "i'll", "i've", "i'd") else emptySet()
+
     private val singleLetterWords: Set<String> =
         if (locale.language == "es") setOf("a", "y", "o", "e", "u") else setOf("a", "i")
 
@@ -294,18 +372,25 @@ class Suggester(
             byKey[k] = Suggestion(shown, score, Suggestion.Kind.PREDICTION)
         }
         if (prevNode >= 0) {
-            dict.forEachNext(prevNode) { node, logP ->
-                if (!(blockOffensive && dict.isOffensive(node))) {
-                    offer(dict.wordOf(node), logP + userBoost(dict.keyOf(node), ctx))
-                }
+            // Candidates: what follows the last two or three words, and the last word.
+            // Every one is scored with the whole context, so "I want to" ranks go/be/see.
+            val seen = HashSet<Int>()
+            fun consider(node: Int) {
+                if (!seen.add(node) || (blockOffensive && dict.isOffensive(node))) return
+                offer(dict.wordOf(node), lm(node, prevNode, ctx) + cacheBoost(dict.keyOf(node)))
             }
+            val r = resolve(ctx, prevNode)
+            if (r.any) dict.ngrams!!.forEachNext(r) { consider(it) }
+            dict.forEachNext(prevNode) { node, _ -> consider(node) }
         }
         ctx.prevWord?.let { prev ->
-            for ((w, count) in user.nextWords(prev, limit * 2)) {
+            val learned = user.nextWords(prev, limit * 2) +
+                (ctx.prev2?.let { user.nextWordsAfter(it, prev, limit * 2) } ?: emptyList())
+            for ((w, count) in learned) {
                 val node = dict.findWord(w)
                 val word = if (node >= 0) dict.wordOf(node) else w
-                val base = if (node >= 0) dict.bigramLogP(prevNode, node) ?: dict.unigramLogP(node) else LEARNED_BASE
-                offer(word, base + userBoost(w, ctx) + 0.5f * ln(1f + count))
+                val base = if (node >= 0) lm(node, prevNode, ctx) else learnedLm(w, ctx)
+                offer(word, base + 0.5f * ln(1f + count) + cacheBoost(w.lowercase(locale)))
             }
         }
         return byKey.values.sortedByDescending { it.score }.take(limit)
@@ -331,9 +416,34 @@ class Suggester(
             ln(pu)
         } else {
             val pb = dict.bigramLogP(prevNode, node)
-            if (pb != null) ln(BIGRAM_WEIGHT * exp(pb) + (1 - BIGRAM_WEIGHT) * pu) else ln(BIGRAM_MISSING * pu)
+            val s2 = if (pb != null) ln(BIGRAM_WEIGHT * exp(pb) + (1 - BIGRAM_WEIGHT) * pu) else ln(BIGRAM_MISSING * pu)
+            // The earlier words of the sentence refine it ("how are" → you, "I want to" → go).
+            val r = resolve(ctx, prevNode)
+            if (r.any) dict.ngrams!!.score(r, node, s2) else s2
         }
         return if (withUser) base + userBoost(dict.keyOf(node), ctx) else base
+    }
+
+    /**
+     * N-gram rows for [ctx] whose last word is [prevNode]; cached on the context, which only
+     * lives for one suggestion pass. A word the dictionary doesn't know ends the context.
+     */
+    private fun resolve(ctx: Context, prevNode: Int): NgramModel.Resolved {
+        val model = dict.ngrams ?: return NgramModel.Resolved.NONE
+        if (prevNode <= 0 || ctx.prevWord == null) return NgramModel.Resolved.NONE
+        if (ctx.resolvedBy === model) ctx.resolved?.let { return it }
+        val e = ctx.earlier
+        fun nodeOf(i: Int): Int = when {
+            i >= 0 -> dict.findWord(e[i].lowercase(locale))
+            i == -1 && ctx.earlierStart -> BinaryDictionary.ROOT
+            else -> -1
+        }
+        val b = nodeOf(e.size - 1)
+        val a = if (b > 0) nodeOf(e.size - 2) else -1
+        val r = model.resolve(a, b, prevNode)
+        ctx.resolved = r
+        ctx.resolvedBy = model
+        return r
     }
 
     private fun learnedLm(word: String, ctx: Context): Float = LEARNED_BASE + userBoost(word, ctx)
@@ -346,6 +456,10 @@ class Suggester(
         if (prev != null) {
             val pc = user.pairCount(prev, key)
             if (pc > 0) b += USER_PAIR_BOOST * ln(1f + pc)
+            ctx.prev2?.let { p2 ->
+                val tc = user.tripleCount(p2, prev, key)
+                if (tc > 0) b += USER_TRIPLE_BOOST * ln(1f + tc)
+            }
         }
         return b
     }
@@ -362,6 +476,11 @@ class Suggester(
         const val BIGRAM_MISSING = 0.65f
         const val USER_WORD_BOOST = 0.6f
         const val USER_PAIR_BOOST = 1.0f
+        /** On top of the pair boost, for a three-word phrase the user has typed before. */
+        const val USER_TRIPLE_BOOST = 0.8f
+        /** Conversation cache (tools/predict_bench.py CACHE_BOOST / CACHE_SIZE). */
+        const val CACHE_BOOST = 0.3f
+        const val CACHE_SIZE = 300
         /** A listed typo (tools/build_typos.py) is offered as its word at this edit cost... */
         const val TYPO_LIST_COST = 0.3f
         /** ...plus this score bonus, so it beats look-alikes the taps alone can't rule out. */
@@ -370,6 +489,15 @@ class Suggester(
         const val RARE_TYPED_BONUS = 3.0f
         /** ln P for a learned word the dictionary doesn't know, before boosts. */
         const val LEARNED_BASE = -11f
+        /** Score taken off a learned word the user never confirmed, as a fix for another typo. */
+        const val LEARNED_UNCONFIRMED_PENALTY = 2.0f
+
+        // A completion as autocorrect (see chooseAutocorrect); tuned with tools/typo_bench.py.
+        const val AUTO_COMPLETE_MIN_LENGTH = 5
+        const val AUTO_COMPLETE_MARGIN = 1.0f
+        const val AUTO_COMPLETE_FIX_COST = 0.9f
+        /** Two-letter words at least this common are never real-word fixed (or ↔ of). */
+        const val REALFIX_SHORT_COMMON_FREQ = 170
         const val MAX_PREFIXES = 12
         const val COMPLETIONS_PER_PREFIX = 3
         const val MAX_RESULTS = 8

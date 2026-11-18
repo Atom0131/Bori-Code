@@ -52,12 +52,24 @@ class KeyboardView(context: Context) : View(context) {
 
     var listener: Listener? = null
     var overlay: KeyOverlayView? = null
+    /** Press effects layer (sparkles, hearts…), same coordinates as this view. */
+    var effects: EffectsView? = null
+    /** LED lighting on the keys (configured by the service). */
+    val led = LedLights()
     var keyPreviewEnabled = true
-    var keyHeightScale = 1f
+    /** Key height multiplier per [Posture] (indexed by ordinal); picked again after a fold or rotation. */
+    var keyHeightScales = FloatArray(Posture.entries.size) { 1f }
         set(value) {
+            if (field.contentEquals(value)) return
             field = value
             requestLayout()
         }
+
+    /**
+     * The user's learned aim per letter (key units, from the touch heat map) for how the phone
+     * is held now; null = plain key boxes. Asked on every touch, so it must be cheap (cached).
+     */
+    var aimShifts: (() -> Map<Char, FloatArray>)? = null
 
     /** Split the letters and symbols in two on big screens (unfolded foldables, tablets). */
     var splitOnBigScreens = true
@@ -99,9 +111,19 @@ class KeyboardView(context: Context) : View(context) {
 
     private val density = resources.displayMetrics.density
     private val handler = Handler(Looper.getMainLooper())
-    private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+    private val backgroundPaint = Paint()
+    private val ledTicker = FrameTicker(this, "led")
+    private val pressedNow = ArrayList<PlacedKey>(4)
+    /** Upper-case labels, made once (not a new String per key per frame). */
+    private val upperLabels = HashMap<String, String>()
+    /** False while an ambient effect runs behind us: InputRootView paints the background. */
+    var paintBackground = true
     private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.RIGHT }
+    /** Draws keys in the theme's look; set up in [updateBorderPaint]. */
+    private val painter = com.bori.core.keyboard.theme.KeyPainter()
+    private var labelFace: Typeface = Typeface.DEFAULT
+    private var labelFaceBold: Typeface = Typeface.DEFAULT_BOLD
 
     private class Pointer(val id: Int) {
         var placed: PlacedKey? = null
@@ -112,6 +134,12 @@ class KeyboardView(context: Context) : View(context) {
         var popup: KeyOverlayView.Popup? = null
         var x = Float.NaN
         var y = Float.NaN
+        /**
+         * Where the finger was when it got onto [placed]. A tap types that key with these
+         * coordinates, not where the finger lifted: thumbs roll a few pixels as they lift.
+         */
+        var keyX = Float.NaN
+        var keyY = Float.NaN
         var longPress: Runnable? = null
         var repeat: Runnable? = null
         var mode = Mode.KEY
@@ -144,6 +172,11 @@ class KeyboardView(context: Context) : View(context) {
     /** Set by the service: glide typing is possible now (letters, suggestions, dictionary). */
     var glideEnabled = false
     var glideTrail = true
+    /** Prefs.TRAIL_THEME (accent), Prefs.TRAIL_RAINBOW, or an ARGB colour. */
+    var trailColor = com.bori.core.keyboard.settings.Prefs.TRAIL_THEME
+
+    private fun trailColorOrAccent() =
+        if (trailColor == com.bori.core.keyboard.settings.Prefs.TRAIL_THEME) theme.accent else trailColor
     var spaceCursorEnabled = true
     var deleteSlideEnabled = true
     var keyFlicksEnabled = true
@@ -153,6 +186,7 @@ class KeyboardView(context: Context) : View(context) {
     fun setKeyboard(layout: KeyboardLayout, locale: Locale) {
         cancelAll()
         this.layout = layout
+        if (locale != this.locale) upperLabels.clear()
         this.locale = locale
         rebuildGeometry(width, height)
         requestLayout()
@@ -166,10 +200,20 @@ class KeyboardView(context: Context) : View(context) {
         invalidate()
     }
 
+    fun currentTheme(): KeyboardTheme = theme
+
     fun setTheme(theme: KeyboardTheme) {
         this.theme = theme
         rebuildGeometry(width, height)
+        updateBorderPaint(width)
         invalidate()
+    }
+
+    /** Key painter + label fonts; rebuilt on theme or width change, never in onDraw. */
+    private fun updateBorderPaint(w: Int) {
+        painter.prepare(theme, w.toFloat(), density)
+        labelFace = theme.typeface ?: Typeface.DEFAULT
+        labelFaceBold = if (theme.typeface == null) Typeface.DEFAULT_BOLD else Typeface.create(theme.typeface, Typeface.BOLD)
     }
 
     /** Key centres for the current geometry; the glide decoder will read this in Stage 2. */
@@ -178,10 +222,11 @@ class KeyboardView(context: Context) : View(context) {
     private fun dp(v: Float) = v * density
 
     private fun keyHeightPx(): Float {
-        val screenH = resources.configuration.screenHeightDp
-        // Keep landscape (and the outer screen of a flip/fold) from filling the display.
-        val capDp = screenH * 0.1f
-        return dp(minOf(54f * keyHeightScale, capDp.coerceAtLeast(36f)))
+        val c = resources.configuration
+        // The user's height for how the phone is held now, capped so the keyboard stays about
+        // half the screen at most (landscape and cover screens stay short).
+        val scale = keyHeightScales.getOrElse(Posture.of(c).ordinal) { 1f }
+        return dp(KeySize.rowDp(c.screenHeightDp, scale))
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -195,6 +240,7 @@ class KeyboardView(context: Context) : View(context) {
         // Fold/unfold, rotation or a height change: old touch points no longer match the keys.
         if (oldw != 0) cancelAll()
         rebuildGeometry(w, h)
+        if (w != oldw) updateBorderPaint(w)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration?) {
@@ -204,6 +250,7 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     private fun rebuildGeometry(w: Int, h: Int) {
+        led.clearPresses()
         val l = layout ?: return
         if (w <= 0 || h <= 0) return
         val split = isSplit(w, l)
@@ -219,6 +266,38 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     /**
+     * The key under ([x], [y]), except near a border between two letters: there the letter
+     * whose learned aim point (centre + the user's shift) is closer wins. Shifts are at most
+     * 0.4 key, and only touches within [AIM_ZONE] of a letter's face are reconsidered.
+     */
+    private fun aimedKeyAt(x: Float, y: Float): PlacedKey? {
+        val g = geometry ?: return null
+        val pk = g.keyAt(x, y)
+        val shifts = aimShifts?.invoke()
+        if (shifts.isNullOrEmpty() || pk == null || !pk.key.isLetter) return pk
+        val kw = (pk.visual.width() + dp(theme.keyGapHDp)).coerceAtLeast(1f)
+        val kh = g.rowHeight.coerceAtLeast(1f)
+        var best = pk
+        var bestD = Float.MAX_VALUE
+        for (cand in g.keys) {
+            if (!cand.key.isLetter) continue
+            val v = cand.visual
+            if (x < v.left - kw * AIM_ZONE || x > v.right + kw * AIM_ZONE ||
+                y < v.top - kh * AIM_ZONE || y > v.bottom + kh * AIM_ZONE
+            ) continue
+            val sh = shifts[cand.key.label[0].lowercaseChar()]
+            val dx = (x - v.centerX()) / kw - (sh?.get(0) ?: 0f)
+            val dy = (y - v.centerY()) / kh - (sh?.get(1) ?: 0f)
+            val d = dx * dx + dy * dy
+            if (d < bestD) {
+                bestD = d
+                best = cand
+            }
+        }
+        return best
+    }
+
+    /**
      * Split into two halves? Only on big screens, and never the number pads; a phone in
      * landscape doesn't count (its smallest width is phone-sized).
      */
@@ -229,22 +308,45 @@ class KeyboardView(context: Context) : View(context) {
     // ---------------------------------------------------------------- drawing
 
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(theme.background)
+        // Only our own rectangle: drawColor fills the whole clip, and InputRootView turns
+        // child clipping off (for press effects), so it would paint over the suggestion bar.
+        val bg = theme.solidBackground
+        if (paintBackground && android.graphics.Color.alpha(bg) != 0) {
+            backgroundPaint.color = bg
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), backgroundPaint)
+        }
         val g = geometry ?: return
-        val radius = dp(theme.cornerRadiusDp)
         val keyH = g.rowHeight
-        for (pk in g.keys) {
+        val scale = theme.labelScale
+        // The frame's vsync time (even steps), not the clock at draw time (Session 44).
+        val now = ledTicker.now()
+        val ledOn = led.active
+        val rowCount = g.rows.size
+        val w = width.toFloat()
+        // Continuous rainbow (wave, rows, rainbow breathing): one gradient across all keys.
+        val ledPaint = if (ledOn) led.framePaint(w, height.toFloat(), now) else null
+        val ledKeys = ledPaint != null && led.target == LedLights.Target.KEYS
+        // Pressed keys, once per frame (no iterator per key at 120 fps).
+        pressedNow.clear()
+        for (p in pointers.values) if (p.popup == null) p.placed?.let { pressedNow.add(it) }
+        for (ri in 0 until rowCount) for (pk in g.rows[ri]) {
             val key = pk.key
-            val pressed = pointers.values.any { it.placed === pk && it.popup == null }
+            val light = if (ledOn && ledPaint == null) led.colorFor(pk, ri, rowCount, pk.visual.centerX(), w, now) else 0
+            val pressed = pressedNow.contains(pk)
             val accentFill = key.kind == KeyKind.ENTER ||
                 (key.code == KeyCode.Shift && shift == ShiftState.LOCKED)
-            keyPaint.color = when {
+            val fill = when {
                 pressed -> theme.keyPressed
                 accentFill -> theme.accent
                 key.kind == KeyKind.LETTER || key.kind == KeyKind.SPACE -> theme.keyLetter
                 else -> theme.keyFunction
             }
-            canvas.drawRoundRect(pk.visual, radius, radius, keyPaint)
+            // "Key borders" off: only pressed and accent keys get a shape (inside the painter).
+            val lit = if (light != 0 && led.target == LedLights.Target.KEYS) LedLights.mix(fill, light) else fill
+            val face = painter.draw(canvas, pk.visual, lit, pressed, accentFill || lit != fill || ledKeys)
+            if (ledKeys && !pressed) painter.overlay(canvas, ledPaint!!)
+            if (ledPaint != null && led.target == LedLights.Target.OUTLINE) painter.outline(canvas, ledPaint, dp(2f))
+            if (light != 0 && led.target == LedLights.Target.OUTLINE) painter.outline(canvas, light, dp(2f))
 
             val label = displayLabel(key)
             if (label.isEmpty()) continue
@@ -254,24 +356,51 @@ class KeyboardView(context: Context) : View(context) {
                 key.kind == KeyKind.LETTER -> theme.text
                 else -> theme.textFunction
             }
+            if (light != 0 && led.target == LedLights.Target.LETTERS) {
+                textPaint.color = LedLights.mix(textPaint.color, light)
+            }
             val small = label.length > 1 && key.kind != KeyKind.LETTER || key.kind == KeyKind.SPACE
-            textPaint.textSize = keyH * if (small) 0.26f else 0.40f
-            textPaint.typeface = if (small) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-            drawCentered(canvas, label, pk.visual, textPaint)
+            textPaint.textSize = keyH * scale * if (small) 0.26f else 0.40f
+            textPaint.typeface = if (small) labelFaceBold else labelFace
+            drawCentered(canvas, label, face, textPaint)
+            if (ledPaint != null && led.target == LedLights.Target.LETTERS) {
+                // The letters again in the rainbow, over the normal ones (alpha = brightness).
+                val alpha = ledPaint.alpha
+                textPaint.shader = ledPaint.shader
+                textPaint.color = android.graphics.Color.WHITE
+                textPaint.alpha = alpha
+                drawCentered(canvas, label, face, textPaint)
+                textPaint.shader = null
+                textPaint.alpha = 255
+            }
 
-            key.hint?.let {
+            if (theme.hints) key.hint?.let {
                 hintPaint.color = theme.hint
                 hintPaint.textSize = keyH * 0.2f
-                canvas.drawText(it, pk.visual.right - dp(4f), pk.visual.top + hintPaint.textSize + dp(1f), hintPaint)
+                hintPaint.typeface = labelFace
+                canvas.drawText(it, face.right - dp(4f), face.top + hintPaint.textSize + dp(1f), hintPaint)
             }
         }
+        // LED animation: 60 frames a second on the display's vsync while a mode moves or keys
+        // fade; idle otherwise.
+        if (led.animating && isShown) ledTicker.request() else ledTicker.cancel()
     }
 
     private fun displayLabel(key: Key): String = when (key.code) {
         KeyCode.Enter -> enterLabel
         KeyCode.Space -> spaceLabel
         KeyCode.Shift -> if (shift == ShiftState.OFF) "⇧" else "⬆"
-        else -> if (shift != ShiftState.OFF && key.isLetter) key.label.uppercase(locale) else key.label
+        else -> if (key.isLetter && showUpper()) {
+            upperLabels.getOrPut(key.label) { key.label.uppercase(locale) }
+        } else {
+            key.label
+        }
+    }
+
+    private fun showUpper(): Boolean = when (theme.labelCase) {
+        com.bori.core.keyboard.theme.LabelCase.UPPER -> true
+        com.bori.core.keyboard.theme.LabelCase.LOWER -> false
+        com.bori.core.keyboard.theme.LabelCase.AUTO -> shift != ShiftState.OFF
     }
 
     private fun drawCentered(canvas: Canvas, text: String, r: RectF, paint: Paint) {
@@ -305,7 +434,7 @@ class KeyboardView(context: Context) : View(context) {
                 p.downTime = e.eventTime
                 p.addPoint(p.x, p.y, e.eventTime)
                 pointers[p.id] = p
-                val pk = geometry?.keyAt(p.x, p.y)
+                val pk = aimedKeyAt(p.x, p.y)
                 p.downKey = pk
                 press(p, pk, slid = false)
             }
@@ -333,6 +462,8 @@ class KeyboardView(context: Context) : View(context) {
     private fun press(p: Pointer, pk: PlacedKey?, slid: Boolean) {
         clearTimers(p)
         p.placed = pk
+        p.keyX = p.x
+        p.keyY = p.y
         p.slid = slid
         p.consumed = false
         if (pk == null) {
@@ -341,6 +472,11 @@ class KeyboardView(context: Context) : View(context) {
         }
         val key = pk.key
         listener?.onKeyPressed(key)
+        if (!slid) {
+            led.onPress(pk, android.os.SystemClock.uptimeMillis())
+            effects?.burst(p.x, p.y, pk.visual)
+            if (led.active) invalidate()
+        }
         if (!slid && (key.code == KeyCode.Shift || key.code == KeyCode.Delete)) {
             // These act on touch-down so they can be held while typing with another finger.
             p.consumed = true
@@ -364,7 +500,7 @@ class KeyboardView(context: Context) : View(context) {
         val kw = keyWidthPx()
         when (p.mode) {
             Mode.GLIDE -> {
-                if (glideTrail) overlay?.setTrail(this, p.pathX, p.pathY, p.pathCount, theme.accent)
+                if (glideTrail) overlay?.setTrail(this, p.pathX, p.pathY, p.pathCount, trailColorOrAccent())
                 return
             }
             Mode.SPACE_CURSOR -> {
@@ -410,8 +546,17 @@ class KeyboardView(context: Context) : View(context) {
                 }
             }
         }
-        val pk = geometry?.keyAt(x, y)
+        val pk = aimedKeyAt(x, y)
         if (pk === p.placed) return
+        // Hysteresis (as in AOSP/HeliBoard): the finger has to go clearly past the edge of the
+        // key it is on before the touch moves to the neighbour, so a wobble at a key border
+        // doesn't swap the letter.
+        p.placed?.let { cur ->
+            val outX = maxOf(cur.hit.left - x, x - cur.hit.right, 0f)
+            val outY = maxOf(cur.hit.top - y, y - cur.hit.bottom, 0f)
+            val kh = geometry?.rowHeight ?: kw
+            if (outX < kw * KEY_HYSTERESIS && outY < kh * KEY_HYSTERESIS) return
+        }
         if (p.consumed) {
             // Leaving a held delete stops the repeat; nothing else follows a consumed touch.
             if (p.repeat != null) clearTimers(p)
@@ -435,7 +580,7 @@ class KeyboardView(context: Context) : View(context) {
         p.consumed = true
         p.placed = null
         overlay?.hidePreview(p.id)
-        if (glideTrail) overlay?.setTrail(this, p.pathX, p.pathY, p.pathCount, theme.accent)
+        if (glideTrail) overlay?.setTrail(this, p.pathX, p.pathY, p.pathCount, trailColorOrAccent())
         invalidate()
     }
 
@@ -492,7 +637,7 @@ class KeyboardView(context: Context) : View(context) {
         p.consumed = true
         val key = p.placed?.key ?: return
         if (key.code == KeyCode.Shift || key.code == KeyCode.Delete) return
-        listener?.onKey(key, p.x, p.y)
+        listener?.onKey(key, p.keyX, p.keyY)
         overlay?.hidePreview(p.id)
     }
 
@@ -555,6 +700,7 @@ class KeyboardView(context: Context) : View(context) {
 
     override fun onDetachedFromWindow() {
         cancelAll()
+        effects?.clear()
         super.onDetachedFromWindow()
     }
 
@@ -567,6 +713,10 @@ class KeyboardView(context: Context) : View(context) {
 
         /** Movement (in key widths) before a letter touch becomes a glide. */
         const val GLIDE_START = 0.6f
+        /** How far (in key widths/heights) past a key's edge a finger goes before it changes key. */
+        const val KEY_HYSTERESIS = 0.25f
+        /** How far past a letter's face (in keys) a touch can still be given to it by aim. */
+        const val AIM_ZONE = 0.3f
         /** Movement (in key widths) before a space/delete touch becomes a slide. */
         const val SLIDE_START = 0.6f
         /** Key widths of spacebar travel per cursor step. */

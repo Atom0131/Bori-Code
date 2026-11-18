@@ -11,7 +11,7 @@ import java.util.concurrent.Executors
  * Everything the keyboard learns from the user, kept only on this phone (app-private
  * database, excluded from backup). Per language it holds:
  *  - word counts (learned words become suggestions after [LEARN_AFTER] uses),
- *  - word-pair counts for next-word prediction,
+ *  - word-pair and three-word-phrase counts for next-word prediction,
  *  - the personal dictionary (words added explicitly, always valid),
  *  - blocked words that must never be suggested,
  *  - (all languages) the user's average finger offset at each key, for glide typing.
@@ -25,6 +25,8 @@ class UserStore private constructor(context: Context) {
     @Volatile private var lang = ""
     private val words = ConcurrentHashMap<String, Int>()
     private val pairs = ConcurrentHashMap<String, Int>()
+    /** "prev2 SEP prev" -> (word -> count). */
+    private val triples = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
     private val personal: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val blocked: MutableSet<String> = ConcurrentHashMap.newKeySet()
     /** Dictionary words whose correction the user undid, and how often. */
@@ -37,13 +39,18 @@ class UserStore private constructor(context: Context) {
     @Synchronized
     fun load(language: String) {
         if (language == lang) return
-        words.clear(); pairs.clear(); personal.clear(); blocked.clear(); kept.clear()
+        words.clear(); pairs.clear(); triples.clear(); personal.clear(); blocked.clear(); kept.clear()
         val db = helper.readableDatabase
         db.rawQuery("SELECT word, count FROM words WHERE lang=?", arrayOf(language)).use {
             while (it.moveToNext()) words[it.getString(0)] = it.getInt(1)
         }
         db.rawQuery("SELECT prev, word, count FROM pairs WHERE lang=?", arrayOf(language)).use {
             while (it.moveToNext()) pairs[pairKey(it.getString(0), it.getString(1))] = it.getInt(2)
+        }
+        db.rawQuery("SELECT prev2, prev, word, count FROM triples WHERE lang=?", arrayOf(language)).use {
+            while (it.moveToNext()) {
+                triples.getOrPut(pairKey(it.getString(0), it.getString(1))) { ConcurrentHashMap() }[it.getString(2)] = it.getInt(3)
+            }
         }
         db.rawQuery("SELECT word FROM personal WHERE lang=?", arrayOf(language)).use {
             while (it.moveToNext()) personal.add(it.getString(0))
@@ -70,6 +77,8 @@ class UserStore private constructor(context: Context) {
 
     fun countOf(word: String): Int = words[word.lowercase()] ?: 0
     fun pairCount(prev: String, word: String): Int = pairs[pairKey(prev.lowercase(), word.lowercase())] ?: 0
+    fun tripleCount(prev2: String, prev: String, word: String): Int =
+        triples[pairKey(prev2.lowercase(), prev.lowercase())]?.get(word.lowercase()) ?: 0
     fun isPersonal(word: String): Boolean = personal.contains(word.lowercase())
     fun isBlocked(word: String): Boolean = blocked.contains(word.lowercase())
     fun keptCount(word: String): Int = kept[word.lowercase()] ?: 0
@@ -93,19 +102,31 @@ class UserStore private constructor(context: Context) {
             .toList()
     }
 
+    /** Words the user has typed after "[prev2] [prev]", most frequent first. */
+    fun nextWordsAfter(prev2: String, prev: String, limit: Int): List<Pair<String, Int>> {
+        val m = triples[pairKey(prev2.lowercase(), prev.lowercase())] ?: return emptyList()
+        return m.entries.sortedByDescending { it.value }.take(limit).map { it.key to it.value }
+    }
+
     // ---------------------------------------------------------------- learning
 
     /**
      * Records a committed word. [boost] > 1 when the user explicitly chose a word the
      * dictionary doesn't know (picked their literal typing), so it is learned at once.
      */
-    fun recordWord(prev: String?, word: String, boost: Int = 1) {
+    fun recordWord(prev: String?, word: String, boost: Int = 1, prev2: String? = null) {
         val key = word.lowercase()
         val language = lang
         if (language.isEmpty() || key.isEmpty() || key.length > 48) return
         val count = words.merge(key, boost) { a, b -> a + b } ?: boost
         val prevKey = prev?.lowercase()
         val pairCount = if (prevKey != null) pairs.merge(pairKey(prevKey, key), 1) { a, b -> a + b } ?: 1 else 0
+        val prev2Key = if (prevKey != null) prev2?.lowercase() else null
+        val tripleCount = if (prev2Key != null && prevKey != null) {
+            triples.getOrPut(pairKey(prev2Key, prevKey)) { ConcurrentHashMap() }.merge(key, 1) { a, b -> a + b } ?: 1
+        } else {
+            0
+        }
         val now = System.currentTimeMillis()
         io.execute {
             val db = helper.writableDatabase
@@ -116,6 +137,12 @@ class UserStore private constructor(context: Context) {
                 db.insertWithOnConflict("pairs", null, ContentValues().apply {
                     put("lang", language); put("prev", prevKey); put("word", key)
                     put("count", pairCount); put("last", now)
+                }, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            if (prev2Key != null && prevKey != null) {
+                db.insertWithOnConflict("triples", null, ContentValues().apply {
+                    put("lang", language); put("prev2", prev2Key); put("prev", prevKey); put("word", key)
+                    put("count", tripleCount); put("last", now)
                 }, SQLiteDatabase.CONFLICT_REPLACE)
             }
         }
@@ -233,6 +260,11 @@ class UserStore private constructor(context: Context) {
 
     data class Entry(val lang: String, val word: String)
 
+    /** Moves the database log into the main file, so a plain file copy is complete (backups). */
+    fun checkpoint() {
+        runCatching { helper.writableDatabase.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() } }
+    }
+
     fun listPersonal(): List<Entry> = list("SELECT lang, word FROM personal ORDER BY lang, word")
     fun listLearned(): List<Entry> =
         list("SELECT lang, word FROM words WHERE count >= $LEARN_AFTER ORDER BY lang, count DESC")
@@ -261,6 +293,11 @@ class UserStore private constructor(context: Context) {
         helper.writableDatabase.delete(table, "lang=? AND word=?", arrayOf(e.lang, e.word))
         if (table == "words") helper.writableDatabase.delete("kept", "lang=? AND word=?", arrayOf(e.lang, e.word))
         if (table == "words") helper.writableDatabase.delete("pairs", "lang=? AND (word=? OR prev=?)", arrayOf(e.lang, e.word, e.word))
+        if (table == "words") {
+            helper.writableDatabase.delete(
+                "triples", "lang=? AND (word=? OR prev=? OR prev2=?)", arrayOf(e.lang, e.word, e.word, e.word),
+            )
+        }
         lang = "" // force a reload next time the keyboard starts
     }
 
@@ -268,12 +305,13 @@ class UserStore private constructor(context: Context) {
         helper.writableDatabase.apply {
             delete("words", null, null)
             delete("pairs", null, null)
+            delete("triples", null, null)
             delete("kept", null, null)
         }
         lang = ""
     }
 
-    private class Helper(context: Context) : SQLiteOpenHelper(context, "terminal_words.db", null, 3) {
+    private class Helper(context: Context) : SQLiteOpenHelper(context, "terminal_words.db", null, 4) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("CREATE TABLE words (lang TEXT NOT NULL, word TEXT NOT NULL, count INTEGER NOT NULL, last INTEGER NOT NULL, PRIMARY KEY (lang, word))")
             db.execSQL("CREATE TABLE pairs (lang TEXT NOT NULL, prev TEXT NOT NULL, word TEXT NOT NULL, count INTEGER NOT NULL, last INTEGER NOT NULL, PRIMARY KEY (lang, prev, word))")
@@ -281,11 +319,17 @@ class UserStore private constructor(context: Context) {
             db.execSQL("CREATE TABLE blocked (lang TEXT NOT NULL, word TEXT NOT NULL, PRIMARY KEY (lang, word))")
             createKeyOffsets(db)
             createKept(db)
+            createTriples(db)
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
             if (oldVersion < 2) createKeyOffsets(db)
             if (oldVersion < 3) createKept(db)
+            if (oldVersion < 4) createTriples(db)
+        }
+
+        private fun createTriples(db: SQLiteDatabase) {
+            db.execSQL("CREATE TABLE triples (lang TEXT NOT NULL, prev2 TEXT NOT NULL, prev TEXT NOT NULL, word TEXT NOT NULL, count INTEGER NOT NULL, last INTEGER NOT NULL, PRIMARY KEY (lang, prev2, prev, word))")
         }
 
         private fun createKept(db: SQLiteDatabase) {

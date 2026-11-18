@@ -52,6 +52,9 @@ class KeyOverlayView(context: Context) : View(context) {
     private var trailDy = 0f
     private var trailColor = 0
     private var trailFadeStart = 0L
+    /** Thickness of the newest part of the trail, in dp. */
+    var trailWidthDp = com.bori.core.keyboard.settings.Prefs.DEFAULT_TRAIL_WIDTH
+    private val hsv = floatArrayOf(0f, 0.85f, 1f)
     private val trailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
@@ -171,11 +174,18 @@ class KeyOverlayView(context: Context) : View(context) {
         }
         val n = trailCount
         val first = maxOf(1, n - TRAIL_POINTS)
-        val stroke = 5 * density
+        val stroke = trailWidthDp * density
+        val rainbow = trailColor == com.bori.core.keyboard.settings.Prefs.TRAIL_RAINBOW
         for (i in first until n) {
             // Older segments are thinner and more transparent.
             val t = (i - first + 1) / (n - first).toFloat()
-            trailPaint.color = trailColor
+            if (rainbow) {
+                // Hue follows the point index, so colours stay put along the path.
+                hsv[0] = (i * RAINBOW_STEP) % 360f
+                trailPaint.color = android.graphics.Color.HSVToColor(hsv)
+            } else {
+                trailPaint.color = trailColor
+            }
             trailPaint.alpha = (255 * fade * (0.25f + 0.75f * t)).toInt().coerceIn(0, 255)
             trailPaint.strokeWidth = stroke * (0.4f + 0.6f * t)
             canvas.drawLine(xs[i - 1] + trailDx, ys[i - 1] + trailDy, xs[i] + trailDx, ys[i] + trailDy, trailPaint)
@@ -189,11 +199,13 @@ class KeyOverlayView(context: Context) : View(context) {
             drawBubble(canvas, pv.rect, radius, pv.theme.previewBackground)
             textPaint.color = pv.theme.previewText
             textPaint.textSize = pv.rect.height() * 0.5f
+            textPaint.typeface = pv.theme.typeface ?: android.graphics.Typeface.DEFAULT
             drawCentered(canvas, pv.label, pv.rect.centerX(), pv.rect.centerY())
         }
         val p = popup ?: return
         drawBubble(canvas, p.rect, radius, p.theme.previewBackground)
         textPaint.textSize = p.rect.height() * 0.42f
+        textPaint.typeface = p.theme.typeface ?: android.graphics.Typeface.DEFAULT
         p.items.forEachIndexed { i, s ->
             val l = p.rect.left + i * p.cellWidth
             val cell = RectF(l, p.rect.top, l + p.cellWidth, p.rect.bottom)
@@ -213,6 +225,7 @@ class KeyOverlayView(context: Context) : View(context) {
     private companion object {
         const val TRAIL_POINTS = 120
         const val TRAIL_FADE_MS = 250L
+        const val RAINBOW_STEP = 4f
     }
 
     private fun drawBubble(canvas: Canvas, r: RectF, radius: Float, color: Int) {

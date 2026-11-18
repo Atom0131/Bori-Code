@@ -48,7 +48,9 @@ object DiagLog {
                 e.printStackTrace(PrintWriter(sw))
                 synchronized(this) {
                     File(app.filesDir, FILE).writeText(
-                        lines.joinToString("\n") + "\n$CRASH_MARK on ${t.name}\n$sw",
+                        lines.joinToString("\n") + "\n$CRASH_MARK on ${t.name} at " +
+                            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date()) +
+                            "\n$sw",
                     )
                 }
             }
@@ -56,8 +58,30 @@ object DiagLog {
         }
     }
 
-    fun export(context: Context): String =
-        runCatching { File(context.filesDir, FILE).readText() }.getOrDefault("")
+    /**
+     * What "Copy diagnostics" copies, short enough to paste into a chat (long pastes get cut
+     * off at the end): the newest events first, then the last crash report with its date.
+     */
+    fun export(context: Context): String {
+        val text = runCatching { File(context.filesDir, FILE).readText() }.getOrDefault("")
+        if (text.isEmpty()) return ""
+        val at = text.indexOf(CRASH_MARK)
+        val events = (if (at < 0) text else text.substring(0, at)).lines().filter { it.isNotBlank() }
+        val newest = events.takeLast(EXPORT_EVENTS).reversed()
+        val sb = StringBuilder("=== NEWEST EVENTS FIRST (${newest.size} of ${events.size})\n")
+        newest.forEach { sb.append(it).append('\n') }
+        if (at >= 0) {
+            val crash = text.substring(at).lines()
+            sb.append('\n').append(crash.take(EXPORT_CRASH_LINES).joinToString("\n"))
+        }
+        return sb.toString()
+    }
+
+    /** Records a caught error with the first lines of its stack trace (no typed text). */
+    fun error(what: String, t: Throwable) {
+        val trace = t.stackTrace.take(6).joinToString(" | ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }
+        event("ERROR $what: $t @ $trace")
+    }
 
     fun clear(context: Context) {
         synchronized(this) { lines.clear() }
@@ -65,4 +89,6 @@ object DiagLog {
     }
 
     private const val CRASH_MARK = "=== CRASH"
+    private const val EXPORT_EVENTS = 45
+    private const val EXPORT_CRASH_LINES = 14
 }

@@ -50,10 +50,21 @@ class KeyProximity(geometry: KeyGeometry) {
     fun centerX(c: Char): Float = cx[c] ?: Float.NaN
     fun centerY(c: Char): Float = cy[c] ?: Float.NaN
 
-    /** Distance from (x, y) to the centre of [c]'s key, in key sizes; NaN if [c] has no key. */
+    /** Learned per-user target shift per key (key units, from the touch heat map). */
+    private var shifts: Map<Char, FloatArray> = emptyMap()
+
+    fun setShifts(map: Map<Char, FloatArray>) {
+        shifts = map
+    }
+
+    /**
+     * Distance from (x, y) to where this user aims for [c] (the key centre plus their learned
+     * shift), in key sizes; NaN if [c] has no key. centerX/centerY stay the real centres.
+     */
     fun distance(x: Float, y: Float, c: Char): Float {
-        val kx = cx[c] ?: return Float.NaN
-        val ky = cy[c] ?: return Float.NaN
+        val sh = shifts[c]
+        val kx = (cx[c] ?: return Float.NaN) + (sh?.get(0) ?: 0f) * keyWidth
+        val ky = (cy[c] ?: return Float.NaN) + (sh?.get(1) ?: 0f) * keyHeight
         val dx = (x - kx) / keyWidth
         val dy = (y - ky) / keyHeight
         return kotlin.math.sqrt(dx * dx + dy * dy)

@@ -379,7 +379,6 @@ adí	así
 adñor	señor
 aea	sea
 aebor	señor
-aee	ser
 aef	ser
 aelor	señor
 aemás	además
@@ -1502,7 +1501,7 @@ arboreo	arbóreo
 arboreos	arbóreos
 arboricola	arborícola
 arboricolas	arborícolas
-arcangel	arcángel
+arcangel	Arcángel
 arcangeles	arcángeles
 archidacono	archidiácono
 archidaconos	archidiáconos
@@ -2157,7 +2156,6 @@ babilonico	babilónico
 babilonicos	babilónicos
 baculo	báculo
 baculos	báculos
-bad	vas
 bada	nada
 badid	nadie
 badie	nadie
@@ -2670,6 +2668,9 @@ bonsai	bonsái
 bonsais	bonsáis
 borboton	borbotón
 bordon	bordón
+boricana	borincana
+boricano	borincano
+boricanos	borincanos
 boriqueña	borinqueña
 boriqueñas	borinqueñas
 boriqueño	borinqueño
@@ -4007,11 +4008,14 @@ clorídricos	clorhídricos
 closas	cosas
 closet	clóset
 closets	clósets
+clqro	claro
+clro	claro
 clsaa	cosas
 clsad	cosas
 clsas	cosas
 clsaw	cosas
 clsqs	cosas
+clsro	claro
 clsss	cosas
 cluster	clúster
 clusteres	clústeres
@@ -10079,7 +10083,6 @@ finalize	finalice
 financiamento	financiamiento
 financiamentos	financiamientos
 financía	financia
-finde	dónde
 finje	finge
 finlamente	finalmente
 finlandes	finlandés
@@ -10275,7 +10278,6 @@ fotosinteticas	fotosintéticas
 fotosintetico	fotosintético
 fotosinteticos	fotosintéticos
 fotosintésis	fotosíntesis
-fow	dos
 fpnde	dónde
 fps	dos
 fqavor	favor
@@ -21658,7 +21660,6 @@ tabajas	trabajas
 tabajo	trabajo
 tabajos	trabajos
 tablazon	tablazón
-tablet	tableta
 tablets	tabletas
 tablon	tablón
 tabn	tan
@@ -21830,7 +21831,6 @@ tee	te
 teengo	tengo
 teflon	teflón
 tegno	tengo
-tego	tengo
 teheran	Teherán
 tehran	Teherán
 teine	tiene
@@ -22516,7 +22516,6 @@ tqb	tan
 tqk	tal
 tql	tal
 tqn	tan
-tqñ	tal
 trabajao	trabajo
 trabajarón	trabajaron
 trabazon	trabazón
@@ -22912,6 +22911,7 @@ tuenw	tiene
 tuetano	tuétano
 tuetanos	tuétanos
 tuiene	tiene
+tuiter	Twitter
 tuj	tu
 tulipan	tulipán
 tumbon	tumbón

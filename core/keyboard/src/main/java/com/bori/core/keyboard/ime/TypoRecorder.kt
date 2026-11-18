@@ -21,7 +21,8 @@ object TypoRecorder {
     /**
      * kind: "pick" (chose from the strip), "undo" (backspace undid an autocorrection; may be
      * the start of an edit), "keep" (the undone word was then committed unchanged) or
-     * "tapfix" (tapped a typed word and chose a fix).
+     * "tapfix" (tapped a typed word and chose a fix) or "edit" (after an undo, the word the
+     * user committed in its place; chosen = what they really meant).
      */
     fun record(
         context: Context,
@@ -37,6 +38,8 @@ object TypoRecorder {
         if (typed.isEmpty()) return
         val o = JSONObject().apply {
             put("k", kind)
+            // When, so a pasted log shows which lines came after a fix was installed.
+            put("t", java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US).format(java.util.Date()))
             put("lang", language)
             put("typed", typed)
             put("chosen", chosen)
@@ -81,8 +84,10 @@ object TypoRecorder {
     fun count(context: Context): Int =
         runCatching { File(context.filesDir, FILE).useLines { it.count() } }.getOrDefault(0)
 
+    /** Newest lines first: long pastes get cut off at the end, so the old lines are lost, not the new. */
     fun export(context: Context): String =
-        runCatching { File(context.filesDir, FILE).readText() }.getOrDefault("")
+        runCatching { File(context.filesDir, FILE).readLines().filter { it.isNotBlank() }.asReversed().joinToString("\n") }
+            .getOrDefault("")
 
     fun clear(context: Context) {
         File(context.filesDir, FILE).delete()

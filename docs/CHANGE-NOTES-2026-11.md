@@ -6,6 +6,30 @@ GPL code.
 
 ---
 
+## Terminal keyboard: Bori Keyboard's newer typing engine (after 4.6.0, November 18)
+
+The terminal keys were a copy of Bori Keyboard from November 1. They now have Bori Keyboard's
+typing engine as of its November 15 commit:
+- **Smarter prediction and autocorrect**: a 4-gram model, real-word fixes (ans → and), stricter rules
+  for words it learned from you, and "tap a typed word to fix it".
+- **New dictionaries**: about 2,000 new English and Spanish words (AI and tech terms, apps, today's
+  slang, Puerto Rican Spanish first). Abbreviations like ETA, ASAP and TBD stay as typed.
+- **Keys learn your aim**: where your thumb really lands on each key is learned from everyday typing,
+  separately for folded and unfolded, and the keys follow it. Bori Keyboard's calibration test is
+  not included; the terminal learns as you type.
+- **Clipboard panel**: pin and delete clips, select all / cut / copy / paste. 🔍 filters the clips by
+  the word in the type bar. Picture clips stay in the list (a terminal takes text only).
+- **Emoji panel** fixes. The GIF button is hidden: there is no GIF panel here.
+
+Not brought over, by choice: themes, effects and sounds, one-handed and floating modes, voice
+typing, and saved emails/usernames (a terminal is no sign-in form). Effects stay off in the
+terminal, but their code comes along because the key views use it.
+
+For maintainers: `scripts/sync_bori_keyboard.sh` now takes the phone copy's last commit (`git
+archive`), not unfinished work. `view/InputRootView.kt` is Bori Code's own trimmed copy, like
+`ime/InputHost.kt`, and is kept across syncs. `:core:keyboard` now uses kotlinx-serialization,
+for the theme files.
+
 ## 4.4.1 (November 4): GitHub sign-in that works
 
 **GitHub sign-in in the terminal now goes through.** It used to stop at gh's "Press Enter to open

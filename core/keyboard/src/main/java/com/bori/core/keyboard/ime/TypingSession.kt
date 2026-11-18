@@ -10,7 +10,9 @@ import android.view.inputmethod.InputConnection
 import com.bori.core.keyboard.clipboard.ClipboardHistory
 import com.bori.core.keyboard.dict.BinaryDictionary
 import com.bori.core.keyboard.layout.KeyGeometry
+import com.bori.core.keyboard.learn.LoginStore
 import com.bori.core.keyboard.learn.UserStore
+import com.bori.core.keyboard.layout.LayoutId
 import com.bori.core.keyboard.predict.Composer
 import com.bori.core.keyboard.predict.KeyProximity
 import com.bori.core.keyboard.predict.SuggestResult
@@ -19,6 +21,8 @@ import com.bori.core.keyboard.predict.Suggestion
 import com.bori.core.keyboard.settings.Prefs
 import com.bori.core.keyboard.swipe.GlideDecoder
 import com.bori.core.keyboard.swipe.SwipeAdaptation
+import com.bori.core.keyboard.learn.TouchMap
+import com.bori.core.keyboard.view.Posture
 import com.bori.core.keyboard.view.SuggestionStripView
 import java.util.Locale
 
@@ -85,6 +89,13 @@ class TypingSession(
     private var pendingKeep: Undo? = null
 
     /**
+     * Typo log only: an undone autocorrection whose word is still being edited. The next word
+     * committed in its place is logged as an "edit" (typed → what the user really wanted), so
+     * undos that were just the start of an edit become labelled examples too.
+     */
+    private var pendingEdit: Undo? = null
+
+    /**
      * Tap-to-fix: a word already in the text that the cursor was put on. Its suggestions
      * replace the whole word ([start]..[end] in the editor).
      */
@@ -95,6 +106,35 @@ class TypingSession(
 
     private var proximity: KeyProximity? = null
     private var proximityFor: KeyGeometry? = null
+    /** TouchMap version / posture whose shifts [proximity] has (-1 = none). */
+    private var proximityShiftsVersion = -1
+    private var proximityPosture: Posture? = null
+
+    /** Touch heat map (where taps land per key). */
+    private val touchMap by lazy { TouchMap.get(ime.context) }
+
+    // ---------------------------------------------------------------- saved emails + usernames
+
+    private val logins by lazy { LoginStore.get(ime.context) }
+    /** A strip entry in a sign-in field: [label] shown, [text] replaces the last [replace] chars. */
+    private class LoginPick(val label: String, val text: String, val replace: Int, val saved: Boolean)
+    private var loginSlots: List<LoginPick?> = listOf(null, null, null)
+    private var fieldPkg: String? = null
+    /** This field's text was already read for learning (finish runs twice per field). */
+    private var captured = false
+    /** The last field's single-token text: if a password field comes next, it was a sign-in name. */
+    private class LastField(val text: String, val pkg: String?, val at: Long)
+    private var lastField: LastField? = null
+    /** Text -> when it was last counted, so hiding and reopening the keyboard doesn't count twice. */
+    private val countedAt = HashMap<String, Long>()
+    private val loginRefresh = Runnable { refresh() }
+
+    /**
+     * Taps of an autocorrected word, waiting: if the fix is undone they were not aimed at the
+     * fixed word's letters, so they're dropped; otherwise they're recorded at the next commit.
+     */
+    private class PendingTouches(val taps: Composer, val intended: String, val prox: KeyProximity, val posture: Posture)
+    private var pendingTouches: PendingTouches? = null
 
     // ---------------------------------------------------------------- cursor tracking
 
@@ -127,6 +167,19 @@ class TypingSession(
     }
 
     fun start(info: EditorInfo?, policy: EditorPolicy) {
+        // A password field right after a field with one word in it, in the same app: that word
+        // (email or username) is how the user signs in.
+        val prev = lastField
+        lastField = null
+        if (prev != null && policy.isPassword && prev.pkg == info?.packageName &&
+            SystemClock.uptimeMillis() - prev.at < SIGN_IN_WINDOW_MS && prefs.rememberLogins && !prefs.incognito
+        ) {
+            logins.record(prev.text, confirmed = true)
+        }
+        // The conversation cache belongs to one app's conversation.
+        if (info?.packageName != fieldPkg) suggester?.clearRecent()
+        fieldPkg = info?.packageName
+        captured = false
         this.policy = policy
         trainerField = SwipeRecorder.isTrainerField(info, ime.context)
         dropRecorrect()
@@ -143,12 +196,16 @@ class TypingSession(
     }
 
     fun finish() {
+        captureField()
         dropRecorrect()
+        flushTouches()
+        touchMap.saveIfChanged()
         if (!composer.isEmpty) {
             ic?.finishComposingText()
             resetComposer()
         }
         undo = null
+        pendingEdit = null
         autoSpaced = false
     }
 
@@ -174,6 +231,35 @@ class TypingSession(
             !(policy.appNoSuggestions && prefs.followNoSuggestions)
     private fun learningAllowed() = !prefs.incognito && !policy.noLearning && !trainerField
     private fun typoLogOn() = prefs.typoLog && learningAllowed()
+    private fun touchMapOn() = prefs.touchMap && learningAllowed()
+
+    // ---------------------------------------------------------------- touch heat map
+
+    private fun flushTouches() {
+        val p = pendingTouches ?: return
+        pendingTouches = null
+        touchMap.record(p.posture, p.taps, p.intended, p.prox)
+    }
+
+    /**
+     * Records the composing word's taps as aimed at [intended] (the word as kept, or the fix /
+     * pick when it only swaps up to 2 letters, so each tap still belongs to one letter).
+     * [wait]: an autocorrection, which backspace can still undo.
+     */
+    private fun recordTouches(intended: String, wait: Boolean) {
+        flushTouches()
+        if (!touchMapOn() || glideActive || trainerField) return
+        val typed = composer.typed
+        if (intended.length != typed.length || typed.length < 2) return
+        var diffs = 0
+        for (i in typed.indices) if (typed[i].lowercaseChar() != intended[i].lowercaseChar()) diffs++
+        if (diffs > 2) return
+        val prox = proximity() ?: return
+        val snap = Composer()
+        for (i in typed.indices) snap.add(typed[i].toString(), composer.x(i), composer.y(i))
+        val p = PendingTouches(snap, intended, prox, Posture.of(ime.context))
+        if (wait) pendingTouches = p else touchMap.record(p.posture, p.taps, p.intended, p.prox)
+    }
 
     // ---------------------------------------------------------------- typing
 
@@ -308,6 +394,8 @@ class TypingSession(
                     TypoRecorder.record(ime.context, "undo", locale.language, u.typed, u.typed, u.committed, null, null, null)
                 }
                 pendingKeep = u
+                pendingEdit = u
+                pendingTouches = null
                 refresh()
                 return
             }
@@ -326,6 +414,8 @@ class TypingSession(
 
     fun onEnter(action: Int?) {
         val ic = ic ?: return
+        // Next / Go / Done: the field is finished, so read it now while it's still connected.
+        if (action != null) captureField()
         lastSpaceAt = 0L
         dropRecorrect()
         if (!composer.isEmpty) commitComposing(ic, autocorrect = true, separator = "")
@@ -360,6 +450,10 @@ class TypingSession(
         val word = auto?.word ?: typed
         val keep = pendingKeep?.takeIf { it.typed == typed && word == typed }
         val ctx = contextBefore(ic, excludeComposing = true)
+        // Heat map: a valid word kept as typed, or a small autocorrect fix (dropped if undone).
+        if (word != typed) recordTouches(word, wait = true)
+        else if (res?.typedValid == true || keep != null) recordTouches(typed, wait = false)
+        else flushTouches()
         // A glide committed as decoded (no alternative picked) teaches the user's finger offsets.
         lastGlide?.let { g ->
             if (glideActive && g.word == word && prefs.adaptSwipe && !trainerField) {
@@ -372,12 +466,21 @@ class TypingSession(
         resetComposer()
         result = null
         learn(ctx, word, explicit = false)
-        if (keep != null) keepUndone(keep)
+        if (keep != null) keepUndone(keep) else logEdit(word)
+        pendingEdit = null
         val fixed = word != typed && auto != null && auto.kind != Suggestion.Kind.EXACT
         val typedIsWord = fixed && (dictionary?.findWord(typed.lowercase(locale)) ?: -1) >= 0
         // A word that got fixed was a slip; stop boosting it if it was learned ("rhe").
         if (fixed && learningAllowed()) user.demote(typed)
         undo = if (fixed) Undo(typed, word, separator, typedIsWord) else null
+    }
+
+    /** After an undo, the user committed [word] in place of the undone fix: log what they meant. */
+    private fun logEdit(word: String) {
+        val u = pendingEdit ?: return
+        pendingEdit = null
+        if (!typoLogOn() || word == u.typed || word.isBlank()) return
+        TypoRecorder.record(ime.context, "edit", locale.language, u.typed, word, u.committed, null, null, null)
     }
 
     /** The user undid a fix and committed what they typed: they meant it. */
@@ -394,10 +497,13 @@ class TypingSession(
         if (!learningAllowed() || text.isBlank()) return
         // A missed-space fix commits several words; learn each with its own context.
         var prev = if (ctx.sentenceStart) null else ctx.prevWord
+        var prev2 = if (ctx.sentenceStart) null else ctx.prev2
         for (word in text.split(' ').filter { it.isNotEmpty() }) {
-            user.recordWord(prev, word, if (explicit) UserStore.LEARN_AFTER else 1)
+            user.recordWord(prev, word, if (explicit) UserStore.LEARN_AFTER else 1, prev2)
+            suggester?.noteRecent(word)
             // Picking an unknown word as typed confirms it: it won't be autocorrected.
             if (explicit) user.recordKeep(word)
+            prev2 = prev
             prev = word
         }
     }
@@ -577,6 +683,33 @@ class TypingSession(
         refresh()
     }
 
+    /**
+     * Offline voice typing: types one phrase, with a space before it when the text before the
+     * cursor needs one, and a capital when [capitalize] (sentence start). Returns what was typed.
+     */
+    fun onVoiceText(raw: String, capitalize: Boolean): String? {
+        val ic = ic ?: return null
+        var text = raw.trim()
+        if (text.isEmpty()) return null
+        if (capitalize) text = text.replaceFirstChar { it.titlecase(locale) }
+        val before = ic.getTextBeforeCursor(1, 0)?.toString().orEmpty()
+        val space = before.isNotEmpty() && !before.last().isWhitespace() && text.first() !in ".,!?;:)"
+        val typed = if (space) " $text" else text
+        insert(typed)
+        refresh()
+        return typed
+    }
+
+    /** Takes back a phrase from [onVoiceText] if it is still right before the cursor. */
+    fun undoVoiceText(typed: String): Boolean {
+        val ic = ic ?: return false
+        if (ic.getTextBeforeCursor(typed.length, 0)?.toString() != typed) return false
+        ic.deleteSurroundingText(typed.length, 0)
+        moved(-typed.length)
+        refresh()
+        return true
+    }
+
     private fun insert(text: String) {
         val ic = ic ?: return
         dropRecorrect()
@@ -620,6 +753,18 @@ class TypingSession(
 
     override fun onSuggestionPicked(slot: Int) {
         val ic = ic ?: return
+        if (loginsOn()) {
+            val p = loginSlots.getOrNull(slot) ?: return
+            ic.beginBatchEdit()
+            if (p.replace > 0) {
+                ic.deleteSurroundingText(p.replace, 0)
+                moved(-p.replace)
+            }
+            commitRaw(ic, p.text)
+            ic.endBatchEdit()
+            refresh()
+            return
+        }
         val pick = slots.getOrNull(slot) ?: return
         recorrect?.let {
             applyRecorrect(ic, it, pick)
@@ -641,6 +786,9 @@ class TypingSession(
                     if (ctx.sentenceStart) null else ctx.prevWord, composer, proximity(),
                 )
             }
+            logEdit(pick.word)
+            // Picking a word is the clearest sign of what the taps meant.
+            if (!glideActive) recordTouches(pick.word, wait = false)
             resetComposer()
             result = null
             learn(ctx, pick.word, explicit)
@@ -658,6 +806,14 @@ class TypingSession(
     }
 
     override fun onSuggestionLongPressed(slot: Int) {
+        if (loginsOn()) {
+            val p = loginSlots.getOrNull(slot)?.takeIf { it.saved } ?: return
+            strip?.showPrompt("Forget “${p.text}”?", "Forget", "✕", sticky = false) { yes ->
+                if (yes) logins.remove(p.text)
+                refresh()
+            }
+            return
+        }
         val s = slots.getOrNull(slot) ?: return
         if (s.kind == Suggestion.Kind.TYPED) return
         strip?.showBlockPrompt(s.word)
@@ -670,9 +826,18 @@ class TypingSession(
 
     override fun onOpenSettings() = ime.openSettings()
 
+    override fun onSettingsLongPressed() = ime.toggleOneHanded()
+
+    override fun onVoiceButton() = ime.startVoice()
+
     // ---------------------------------------------------------------- selection
 
     fun onUpdateSelection(newSelStart: Int, newSelEnd: Int, candidatesStart: Int, candidatesEnd: Int) {
+        if (loginsOn()) {
+            // The bar follows what's in the field (also after a paste or the app's own edits).
+            handler.removeCallbacks(loginRefresh)
+            handler.post(loginRefresh)
+        }
         val collapsed = newSelStart == newSelEnd
         // The editor reports exactly our composing word ending at the cursor: in sync.
         if (collapsed && !composer.isEmpty && candidatesStart >= 0 && candidatesEnd == newSelStart &&
@@ -714,6 +879,7 @@ class TypingSession(
             result = null
         }
         undo = null
+        pendingEdit = null
         autoSpaced = false
         dropRecorrect()
         refresh()
@@ -757,7 +923,7 @@ class TypingSession(
         if (word.isEmpty() || !word[0].isLetter() || !word.last().isLetter() || word.length >= MAX_WORD) return
         if (i == 0 && before.length >= MAX_WORD) return
         s.blockOffensive = prefs.blockOffensive
-        val ctx = contextOf(before.substring(0, i))
+        val ctx = contextOf(before.substring(0, i), complete = before.length < MAX_WORD)
         val res = s.suggest(Composer().apply { set(word) }, ctx, null, prefs.autocorrect)
         if (res.ranked.isEmpty()) return
         recorrect = Recorrect(pos - left.length, pos + right.length, word, ctx, res)
@@ -810,8 +976,20 @@ class TypingSession(
         if (g !== proximityFor) {
             proximityFor = g
             proximity = KeyProximity(g)
+            proximityShiftsVersion = -1
         }
-        return proximity
+        // The user's learned per-key aim for how the phone is held now.
+        val p = proximity
+        if (p != null) {
+            val posture = Posture.of(ime.context)
+            val v = if (prefs.touchMap) touchMap.version else -2
+            if (v != proximityShiftsVersion || posture != proximityPosture) {
+                proximityShiftsVersion = v
+                proximityPosture = posture
+                if (v >= 0) touchMap.applyTo(p, posture) else p.setShifts(emptyMap())
+            }
+        }
+        return p
     }
 
     private fun currentResult(): SuggestResult? {
@@ -829,6 +1007,10 @@ class TypingSession(
         val strip = strip ?: return
         strip.setIncognito(!learningAllowed())
         strip.setClip(null)
+        if (loginsOn()) {
+            showLogins(strip)
+            return
+        }
         if (!suggestionsOn || suggester == null) {
             slots = listOf(null, null, null)
             strip.clear()
@@ -864,6 +1046,60 @@ class TypingSession(
         if (prefs.clipboardChip) strip.setClip(clipboard?.freshClip())
     }
 
+    /** Saved emails and usernames are offered in this field (email or sign-in field). */
+    private fun loginsOn() = policy.loginField && prefs.rememberLogins && !prefs.incognito && !trainerField
+
+    /**
+     * Sign-in field: saved emails/usernames starting with what's typed (all of them in an empty
+     * field), best in the centre; after "@", email domains (the user's own first).
+     */
+    private fun showLogins(strip: SuggestionStripView) {
+        val before = ic?.getTextBeforeCursor(MAX_LOGIN_CHARS, 0)?.toString().orEmpty()
+        val token = before.takeLastWhile { !it.isWhitespace() && it != ',' && it != ';' }
+        val out = ArrayList<LoginPick>(3)
+        for (m in logins.matches(token, 3)) out.add(LoginPick(m, m, token.length, saved = true))
+        val at = token.indexOf('@')
+        if (at >= 0 && out.size < 3) {
+            val typedDomain = token.substring(at + 1).lowercase()
+            for (d in (logins.domains() + LoginStore.COMMON_DOMAINS).distinct()) {
+                if (out.size >= 3) break
+                if (!d.startsWith(typedDomain) || d == typedDomain) continue
+                val full = token.substring(0, at + 1) + d
+                if (out.any { it.text.equals(full, ignoreCase = true) }) continue
+                out.add(LoginPick("@$d", full, token.length, saved = false))
+            }
+        }
+        loginSlots = listOf(out.getOrNull(1), out.getOrNull(0), out.getOrNull(2))
+        slots = listOf(null, null, null)
+        strip.setItems(loginSlots.mapIndexed { i, p -> p?.let { SuggestionStripView.Item(it.label, bold = i == 1) } })
+    }
+
+    /**
+     * Reads the finished field. An email typed in an email/sign-in field counts one use (shown
+     * from the second); any one-word text is kept for a moment in case a password field comes
+     * next, which confirms it as a sign-in name (see [start]).
+     */
+    private fun captureField() {
+        if (captured) return
+        val ic = ic ?: return
+        captured = true
+        lastField = null
+        if (!prefs.rememberLogins || !learningAllowed() || policy.isPassword || policy.initialLayout != LayoutId.ALPHA) return
+        val before = ic.getTextBeforeCursor(MAX_LOGIN_CHARS, 0)?.toString() ?: return
+        val after = ic.getTextAfterCursor(MAX_LOGIN_CHARS, 0)?.toString().orEmpty()
+        val text = (before + after).trim()
+        if (text.isEmpty() || text.length >= MAX_LOGIN_CHARS || !LoginStore.acceptable(text)) return
+        val now = SystemClock.uptimeMillis()
+        lastField = LastField(text, fieldPkg, now)
+        if (policy.loginField && LoginStore.looksLikeEmail(text)) {
+            val last = countedAt[text.lowercase()]
+            if (last == null || now - last > RECOUNT_MS) {
+                countedAt[text.lowercase()] = now
+                logins.record(text, confirmed = false)
+            }
+        }
+    }
+
     private fun showResult(strip: SuggestionStripView, res: SuggestResult) {
         val typed = Suggestion(res.typed, 0f, Suggestion.Kind.TYPED)
         val auto = res.autocorrect
@@ -895,17 +1131,44 @@ class TypingSession(
         } else {
             raw
         }
-        return contextOf(text)
+        return contextOf(text, complete = raw.length < CONTEXT_CHARS)
     }
 
-    /** Next-word context from the text before a word. */
-    private fun contextOf(text: String): Suggester.Context {
-        val t = text.trimEnd(' ')
-        if (t.isEmpty() || t.last() in ".!?\n¡¿") return Suggester.Context(null, sentenceStart = true)
-        if (!isWordChar(t.last())) return Suggester.Context.NONE
-        var i = t.length
-        while (i > 0 && isWordChar(t[i - 1])) i--
-        return Suggester.Context(t.substring(i), sentenceStart = false)
+    /**
+     * Next-word context from the text before a word: up to [CONTEXT_WORDS] words of the same
+     * sentence, newest first while reading back. Commas are skipped (the n-grams were counted
+     * without them); other punctuation ends the context. [complete]: [text] starts at the
+     * beginning of the field, so running out of text means a new sentence.
+     */
+    private fun contextOf(text: String, complete: Boolean = true): Suggester.Context {
+        val words = ArrayList<String>(CONTEXT_WORDS)
+        var start = false
+        var i = text.length
+        while (words.size < CONTEXT_WORDS) {
+            while (i > 0 && (text[i - 1] == ' ' || text[i - 1] == ',')) i--
+            if (i == 0) {
+                start = complete
+                break
+            }
+            val c = text[i - 1]
+            if (c in ".!?\n¡¿") {
+                start = true
+                break
+            }
+            if (!isWordChar(c)) break
+            val end = i
+            while (i > 0 && isWordChar(text[i - 1])) i--
+            // A word cut off by the read window isn't trustworthy context.
+            if (i == 0 && !complete) break
+            words.add(text.substring(i, end).replace('’', '\''))
+        }
+        if (words.isEmpty()) return if (start) Suggester.Context(null, sentenceStart = true) else Suggester.Context.NONE
+        return Suggester.Context(
+            words[0],
+            sentenceStart = false,
+            earlier = words.drop(1).reversed(),
+            earlierStart = start,
+        )
     }
 
     private fun isWordText(text: String): Boolean {
@@ -919,7 +1182,9 @@ class TypingSession(
 
     companion object {
         private const val DOUBLE_SPACE_MS = 500L
-        private const val CONTEXT_CHARS = 64
+        private const val CONTEXT_CHARS = 128
+        /** Words read back for prediction: the n-gram model uses up to three. */
+        private const val CONTEXT_WORDS = 3
         private const val MAX_WORD = 32
         private val AUTOCORRECT_TRIGGERS = setOf(".", ",", "!", "?", ";", ":", ")", "\"", "…")
         /** Punctuation that sticks to the previous word and is followed by a space. */
@@ -930,5 +1195,10 @@ class TypingSession(
         private const val RECORRECT_DELAY_MS = 150L
         /** Glide results asked for: a few more than the strip shows, so a twin can be found. */
         private const val GLIDE_RESULTS = 8
+        /** Fields longer than this aren't a sign-in name. */
+        private const val MAX_LOGIN_CHARS = 81
+        /** A password field this soon after the name field confirms a sign-in. */
+        private const val SIGN_IN_WINDOW_MS = 5 * 60_000L
+        private const val RECOUNT_MS = 10 * 60_000L
     }
 }

@@ -621,6 +621,7 @@ aill	will
 ailm	will
 ailo	will
 ailp	will
+aiman	woman
 aiml	will
 aiol	will
 aipl	will
@@ -671,6 +672,7 @@ akl	all
 akll	all
 aklut	about
 akm	all
+akman	woman
 akme	some
 akn	an
 aknd	and
@@ -899,7 +901,6 @@ aout	about
 aoyld	would
 aparent	apparent
 apenines	Apennines
-apk	all
 apl	all
 aplication	application
 apll	all
@@ -1732,7 +1733,6 @@ bigvt	night
 bigx	big
 bigy	big
 bigyt	night
-bih	big
 bihe	nice
 bihg	big
 bihht	night
@@ -4425,7 +4425,6 @@ eojng	doing
 eokng	doing
 eol	don
 eolse	else
-eom	don
 eoman	woman
 eomd	some
 eome	some
@@ -5462,7 +5461,6 @@ fkfst	first
 fkhnd	found
 fkind	find
 fkine	fine
-fking	going
 fkirst	first
 fkjnd	found
 fkkd	find
@@ -5470,7 +5468,6 @@ fkke	fine
 fkld	find
 fkmd	find
 fkme	time
-fkn	don
 fknd	find
 fkne	fine
 fknf	find
@@ -5515,7 +5512,6 @@ flemmish	Flemish
 flf	for
 flhnd	found
 fljnd	found
-flld	told
 fln	don
 flnna	gonna
 flor	for
@@ -5607,7 +5603,6 @@ fokund	found
 folna	gonna
 folr	for
 folund	found
-folz	told
 fomna	gonna
 fomr	form
 fonba	gonna
@@ -5727,7 +5722,6 @@ fpf	for
 fphnd	found
 fping	going
 fpjnd	found
-fpld	told
 fpn	don
 fpnna	gonna
 fpor	for
@@ -9162,7 +9156,6 @@ jisg	just
 jisr	just
 jist	just
 jisy	just
-jit	it
 jiuse	house
 jiust	just
 jiw	how
@@ -14105,7 +14098,6 @@ omoy	only
 ompy	only
 omre	more
 omther	mother
-omw	one
 omz	old
 onag	okay
 onah	okay
@@ -14257,7 +14249,7 @@ oplace	place
 opld	old
 oplease	please
 opn	on
-opne	one
+opne	open
 opng	long
 opnly	only
 opok	look
@@ -16178,7 +16170,6 @@ rogut	right
 rogvt	right
 rogyt	right
 rohht	right
-roi	too
 roibg	doing
 roight	right
 roikg	doing
@@ -18129,7 +18120,6 @@ tdol	tell
 tdom	from
 tdpl	tell
 tdry	try
-tds	yes
 tdt	get
 tdu	try
 tdy	try
@@ -19430,6 +19420,7 @@ tjanb	thank
 tjani	thank
 tjanj	thank
 tjank	thank
+tjanksn	thanks
 tjanl	thank
 tjann	thank
 tjano	thank
@@ -19918,7 +19909,6 @@ tpr	for
 tpray	today
 tpsay	today
 tpt	got
-tpu	you
 tpund	found
 tpur	your
 tpzay	today
@@ -21598,12 +21588,16 @@ weant	want
 weaponary	weaponry
 weas	was
 weay	way
+webf	went
+webg	went
 webnt	went
+webr	went
 webt	went
 weby	went
 wedd	were
 wede	were
 wedll	well
+wednes	Wednesday
 wednt	went
 wedr	were
 wedre	were
@@ -21630,6 +21624,8 @@ wehy	why
 weild	wield
 weilded	wielded
 weith	with
+wekf	went
+wekg	went
 wekk	well
 wekl	well
 wekll	well
@@ -21639,7 +21635,9 @@ wekng	wrong
 weknt	went
 weko	well
 wekp	well
+wekr	went
 wekt	went
+weky	went
 welk	well
 welkl	well
 wellk	well
@@ -21659,6 +21657,8 @@ welol	well
 welp	well
 welpl	well
 welse	else
+wemf	went
+wemg	went
 wemk	well
 weml	well
 wemll	well
@@ -21667,7 +21667,9 @@ wemn	well
 wemnt	went
 wemo	well
 wemp	well
+wemr	went
 wemt	went
+wemy	went
 wenbt	went
 wendsay	Wednesday
 wenf	went
@@ -23240,7 +23242,6 @@ wtag	stay
 wtah	stay
 wtain	again
 wtau	stay
-wth	with
 wtih	with
 wtikl	still
 wtilk	still
@@ -23462,7 +23463,6 @@ wwau	away
 wwbt	want
 wwd	was
 wwde	were
-wwe	we
 wwee	were
 wwell	well
 wwent	went

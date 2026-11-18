@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 // Bori Keyboard's typing engine (dictionaries, spell correction, glide decoding, learning), copied
@@ -21,4 +22,5 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    implementation(libs.kotlinx.serialization.json)
 }

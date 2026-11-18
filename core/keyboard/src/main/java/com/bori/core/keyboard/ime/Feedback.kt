@@ -23,19 +23,32 @@ class Feedback(context: Context, private val prefs: Prefs) {
 
     private var effectStrength = -1
     private var effect: VibrationEffect? = null
+    private val packs = SoundPacks(context)
+
+    /** Password fields: no sounds (Stage 3 rule); vibration stays. */
+    var quiet = false
 
     fun onPress(key: Key) {
         if (prefs.haptics) vibrate(prefs.vibrationStrength)
-        if (prefs.sound) {
+        if (prefs.sound && !quiet) playSound(key, prefs.soundPack, prefs.soundVolume)
+    }
+
+    /** Plays [key]'s sound in [pack]; also the Settings preview. */
+    fun playSound(key: Key, pack: String, volume: Float) {
+        // A pack still loading falls back to the phone's click for that press.
+        if (pack != SoundPacks.SYSTEM && packs.play(pack, key, volume)) return
+        run {
             val fx = when (key.code) {
                 KeyCode.Delete -> AudioManager.FX_KEYPRESS_DELETE
                 KeyCode.Enter -> AudioManager.FX_KEYPRESS_RETURN
                 KeyCode.Space -> AudioManager.FX_KEYPRESS_SPACEBAR
                 else -> AudioManager.FX_KEYPRESS_STANDARD
             }
-            audio.playSoundEffect(fx, -1f)
+            audio.playSoundEffect(fx, if (pack == SoundPacks.SYSTEM) -1f else volume)
         }
     }
+
+    fun release() = packs.release()
 
     /** One key buzz at [strength] (1–100); also used by the settings slider as a preview. */
     fun vibrate(strength: Int) {

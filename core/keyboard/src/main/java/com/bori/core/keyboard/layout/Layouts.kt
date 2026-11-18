@@ -122,11 +122,14 @@ object Layouts {
         return buildList {
             add(Key(switchLabel, KeyCode.Switch(switchTarget), 1.5f, KeyKind.FUNCTION))
             add(left)
-            if (showGlobe) add(Key("🌐", KeyCode.Globe, 1f, KeyKind.FUNCTION))
             // Emoji only where people write messages, not in email or web address fields.
             val emoji = variant == FieldVariant.TEXT
+            // 🌐 right beside 😊 got tapped by mistake and switched to another keyboard, so
+            // it only shows where there's no 😊. Holding space opens the keyboard picker anywhere.
+            val globe = showGlobe && !emoji
+            if (globe) add(Key("🌐", KeyCode.Globe, 1f, KeyKind.FUNCTION))
             if (emoji) add(Key("😊", KeyCode.Emoji, 1f, KeyKind.FUNCTION))
-            add(Key(" ", KeyCode.Space, 5f - (if (showGlobe) 1f else 0f) - (if (emoji) 1f else 0f), KeyKind.SPACE))
+            add(Key(" ", KeyCode.Space, 5f - (if (globe) 1f else 0f) - (if (emoji) 1f else 0f), KeyKind.SPACE))
             add(period)
             add(Key("↵", KeyCode.Enter, 1.5f, KeyKind.ENTER))
         }

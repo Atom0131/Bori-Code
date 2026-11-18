@@ -42,6 +42,7 @@ class Dictionaries(context: Context, private val maxLanguages: Int = 2) {
                     "dictionary ${lang.tag} read in ${SystemClock.uptimeMillis() - t0} ms, " +
                         "${dict.typos.size} typos, heap ${heapMb()}",
                 )
+                dict.ngrams = loadNgrams(lang, dict)
                 synchronized(loaded) {
                     loaded.remove(lang)
                     loaded[lang] = dict
@@ -60,6 +61,31 @@ class Dictionaries(context: Context, private val maxLanguages: Int = 2) {
             }
         }
         return null
+    }
+
+    /**
+     * The sentence-context model is optional: if it is missing, mismatched or doesn't fit in
+     * memory, prediction and correction fall back to the dictionary's word pairs.
+     */
+    private fun loadNgrams(lang: Language, dict: BinaryDictionary): NgramModel? {
+        val t0 = SystemClock.uptimeMillis()
+        return try {
+            NgramModel.fromAsset(appContext, "dict/${lang.tag}.ngram", dict).also {
+                DiagLog.event(
+                    "ngrams ${lang.tag} read in ${SystemClock.uptimeMillis() - t0} ms, " +
+                        "${it.entryCount} entries, heap ${heapMb()}",
+                )
+            }
+        } catch (e: OutOfMemoryError) {
+            Log.e(TAG, "Out of memory loading ${lang.tag} ngrams", e)
+            DiagLog.event("ngrams ${lang.tag} OUT OF MEMORY, heap ${heapMb()}: using word pairs only")
+            System.gc()
+            null
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to load ${lang.tag} ngrams", e)
+            DiagLog.event("ngrams ${lang.tag} not loaded: $e")
+            null
+        }
     }
 
     private fun heapMb(): String {

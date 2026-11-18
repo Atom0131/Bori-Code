@@ -17,6 +17,7 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.bori.core.keyboard.ime.DiagLog
 import com.bori.core.keyboard.theme.KeyboardTheme
 
 /**
@@ -29,13 +30,37 @@ class EmojiPanelView(context: Context) : FrameLayout(context) {
         fun onEmoji(text: String)
         fun onEmojiDelete()
         fun onEmojiClose()
+        /** The GIF button: switch to the GIF panel. */
+        fun onEmojiGif()
     }
 
     var listener: Listener? = null
+    /** Bori Code: false hides the GIF button (no GIF panel there). */
+    var showGif = true
     private var theme = KeyboardTheme.light()
     private var recents: List<String> = emptyList()
     /** -1 = recent, otherwise an index into [EmojiData.categories]. */
     private var category = 0
+    /** Style pack used to draw the grid; null = the phone's emoji font. */
+    private var pack: EmojiPack? = null
+    private val custom: EmojiPack? by lazy {
+        try {
+            EmojiPack.custom(context)
+        } catch (t: Throwable) {
+            DiagLog.error("emoji custom pack", t)
+            null
+        }
+    }
+    /** Set after a picture fails to draw: the rest of this session uses the phone's font. */
+    private var picturesBroken = false
+    /** The grid has drawn once since [open]; clears the crash guard. */
+    private var drawnOk = true
+
+    private fun markDrawn() {
+        if (drawnOk) return
+        drawnOk = true
+        context.getSharedPreferences(GUARD_PREFS, Context.MODE_PRIVATE).edit().remove(GUARD_KEY).apply()
+    }
 
     private val density = resources.displayMetrics.density
     private val grid = EmojiGridView(context)
@@ -65,8 +90,28 @@ class EmojiPanelView(context: Context) : FrameLayout(context) {
     }
 
     /** Called each time the panel opens; starts on Recent when there is something in it. */
-    fun open(recents: List<String>) {
+    fun open(recents: List<String>, style: String) {
         this.recents = recents
+        // If the keyboard died while a style was opening last time (even a native crash that
+        // nothing can catch), use the phone's font for that style this time instead.
+        val guard = context.getSharedPreferences(GUARD_PREFS, Context.MODE_PRIVATE)
+        var bad = guard.getString(BAD_KEY, null)
+        if (guard.getString(GUARD_KEY, null) == style && style != EmojiPack.SYSTEM) {
+            bad = style
+            DiagLog.event("emoji style $style crashed the keyboard; using phone font")
+        } else if (bad != null && bad != style) {
+            bad = null // the user picked another style since: give styles a fresh start
+        }
+        val useStyle = if (bad == style) EmojiPack.SYSTEM else style
+        guard.edit().putString(GUARD_KEY, useStyle).putString(BAD_KEY, bad).commit()
+        drawnOk = false
+        pack = try {
+            EmojiPack.get(context, useStyle)
+        } catch (t: Throwable) {
+            DiagLog.error("emoji pack $useStyle", t)
+            null
+        }
+        DiagLog.event("emoji open style=$useStyle pack=${if (pack != null) "loaded" else "none"} recents=${recents.size}")
         select(if (recents.isEmpty()) 0 else -1)
     }
 
@@ -88,7 +133,22 @@ class EmojiPanelView(context: Context) : FrameLayout(context) {
 
     private fun emojiOf(cat: Int): List<String> = usable.getOrPut(cat) {
         val paint = Paint()
-        EmojiData.categories[cat].emoji.split(' ').filter { it.isNotEmpty() && paint.hasGlyph(it) }
+        EmojiData.categories[cat].emoji.split(' ').filter {
+            it.isNotEmpty() && (runCatching { paint.hasGlyph(it) }.getOrDefault(false) || custom?.has(it) == true)
+        }
+    }
+
+    /** The emoji's picture from Bori's own art or the chosen style, or null to draw it as text. */
+    private fun pictureOf(e: String) = if (picturesBroken) {
+        null
+    } else {
+        try {
+            custom?.bitmap(e) ?: pack?.bitmap(e)
+        } catch (t: Throwable) {
+            picturesBroken = true
+            DiagLog.error("emoji picture", t)
+            null
+        }
     }
 
     private fun rounded(color: Int) = GradientDrawable().apply {
@@ -106,7 +166,7 @@ class EmojiPanelView(context: Context) : FrameLayout(context) {
     }
 
     private fun rebuildBar() {
-        setBackgroundColor(theme.background)
+        setBackgroundColor(theme.solidBackground)
         bar.removeAllViews()
         tabs.removeAllViews()
         bar.addView(
@@ -115,6 +175,14 @@ class EmojiPanelView(context: Context) : FrameLayout(context) {
                 setOnClickListener { listener?.onEmojiClose() }
             },
             LinearLayout.LayoutParams(dp(56), LayoutParams.MATCH_PARENT).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) },
+        )
+        if (showGif) bar.addView(
+            barButton("GIF", selected = false).apply {
+                background = rounded(theme.keyFunction)
+                contentDescription = "GIFs"
+                setOnClickListener { listener?.onEmojiGif() }
+            },
+            LinearLayout.LayoutParams(dp(48), LayoutParams.MATCH_PARENT).apply { setMargins(0, dp(4), dp(4), dp(4)) },
         )
         val icons = listOf(-1 to "🕘") + EmojiData.categories.mapIndexed { i, c -> i to c.icon }
         for ((cat, icon) in icons) {
@@ -169,6 +237,7 @@ class EmojiPanelView(context: Context) : FrameLayout(context) {
             }
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
         private val rect = RectF()
+        private val bmpPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         private val slop = ViewConfiguration.get(context).scaledTouchSlop
         private var pressedIndex = -1
         private var downX = 0f
@@ -207,8 +276,27 @@ class EmojiPanelView(context: Context) : FrameLayout(context) {
                     canvas.drawRoundRect(rect, theme.cornerRadiusDp * density, theme.cornerRadiusDp * density, paint)
                     paint.color = theme.text
                 }
-                canvas.drawText(e, x + c / 2, y + baseline, paint)
+                val bmp = pictureOf(e)
+                if (bmp != null && !bmp.isRecycled) {
+                    val inset = c * (1 - EMOJI_FILL) / 2
+                    rect.set(x + inset, y + inset, x + c - inset, y + c - inset)
+                    try {
+                        canvas.drawBitmap(bmp, null, rect, bmpPaint)
+                    } catch (t: Throwable) {
+                        picturesBroken = true
+                        DiagLog.error("emoji draw", t)
+                        canvas.drawText(e, x + c / 2, y + baseline, paint)
+                    }
+                } else {
+                    canvas.drawText(e, x + c / 2, y + baseline, paint)
+                }
             }
+        }
+
+        override fun draw(canvas: Canvas) {
+            super.draw(canvas)
+            // Clear the guard a moment after the first frame, once it has really been shown.
+            if (!drawnOk) postDelayed({ markDrawn() }, 500)
         }
 
         private fun indexAt(x: Float, y: Float): Int {
@@ -250,7 +338,12 @@ class EmojiPanelView(context: Context) : FrameLayout(context) {
     }
 
     companion object {
+        private const val GUARD_PREFS = "emoji_guard"
+        private const val GUARD_KEY = "opening_style"
+        private const val BAD_KEY = "crashed_style"
         private const val CELL_DP = 44
+        /** Share of the cell a pack picture fills (text emoji are drawn at 0.6 of the cell). */
+        private const val EMOJI_FILL = 0.66f
         private const val REPEAT_START_MS = 400L
         private const val REPEAT_MS = 50L
     }

@@ -3,15 +3,16 @@ package com.bori.core.keyboard.theme
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Color
-import android.os.Build
+import android.graphics.Typeface
 import java.util.Calendar
 
 /** When the keyboard is dark. NIGHT uses the phone's clock: dark from 7 pm to 7 am. */
-enum class ThemeMode { SYSTEM, LIGHT, DARK, NIGHT }
+enum class ThemeMode { SYSTEM, LIGHT, DARK, NIGHT, SUN }
 
 /**
- * Colours and shape for the keyboard. Stage 3 replaces the hard-coded palettes with the
- * JSON ThemeSpec engine; views only ever read this class, so they won't need to change.
+ * Colours and shape for the keyboard, resolved from a [ThemeSpec] by [ThemeResolver]. Views
+ * only ever read this class. [light] and [dark] are the classic palettes, used as defaults
+ * for any colour a theme leaves out.
  */
 data class KeyboardTheme(
     val background: Int,
@@ -29,7 +30,37 @@ data class KeyboardTheme(
     val cornerRadiusDp: Float = 8f,
     val keyGapHDp: Float = 5f,
     val keyGapVDp: Float = 8f,
+    /** Top-to-bottom gradient behind the whole keyboard; null = solid [background]. */
+    val backgroundGradient: IntArray? = null,
+    /** Key outline colour (used when [keyBorderGradient] is null). */
+    val keyBorder: Int = Color.TRANSPARENT,
+    /** Left-to-right outline gradient across the keyboard. */
+    val keyBorderGradient: IntArray? = null,
+    val borderWidthDp: Float = 0f,
+    val glowDp: Float = 0f,
+    /** The user's "Key borders" switch: false draws only labels (pressed/accent keys still fill). */
+    val keyShapes: Boolean = true,
+    val look: KeyLook = KeyLook.FLAT,
+    val shape: KeyShape = KeyShape.ROUNDED,
+    /** Key-label font; null = the phone's font. */
+    val typeface: Typeface? = null,
+    val labelScale: Float = 1f,
+    val hints: Boolean = true,
+    val labelCase: LabelCase = LabelCase.AUTO,
+    /** Picture behind everything (InputRootView draws it); null = colour or gradient. */
+    val backdrop: Backdrop? = null,
 ) {
+    /**
+     * What a view should fill its own background with: the solid colour, or transparent when
+     * InputRootView paints a gradient behind everything.
+     */
+    val solidBackground: Int
+        get() = if (backgroundGradient == null && backdrop == null) background else Color.TRANSPARENT
+
+    val hasOutline: Boolean
+        get() = borderWidthDp > 0f && (keyBorderGradient != null || Color.alpha(keyBorder) > 0)
+
+
     companion object {
         fun light(accent: Int = Color.parseColor("#1A73E8")) = KeyboardTheme(
             background = Color.parseColor("#E8EAED"),
@@ -71,17 +102,15 @@ data class KeyboardTheme(
             ThemeMode.LIGHT -> false
             ThemeMode.DARK -> true
             ThemeMode.NIGHT -> Calendar.getInstance().get(Calendar.HOUR_OF_DAY).let { it >= 19 || it < 7 }
+            ThemeMode.SUN -> SunTimes.isDark()
         }
 
-        /** Light or dark palette; uses the Material You accent on Android 12+. */
-        fun forContext(context: Context, night: Boolean = isNight(context)): KeyboardTheme {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val accent = context.getColor(
-                    if (night) android.R.color.system_accent1_200 else android.R.color.system_accent1_600,
-                )
-                return if (night) dark(accent) else light(accent)
-            }
-            return if (night) dark() else light()
-        }
+        /** The user's selected theme, light or dark variant. */
+        fun forContext(
+            context: Context,
+            night: Boolean = isNight(context),
+            themeId: String = ThemeStore.CLASSIC,
+            overrides: ThemeOverrides = ThemeOverrides(),
+        ): KeyboardTheme = ThemeResolver.resolve(context, ThemeStore(context).get(themeId), night, overrides)
     }
 }

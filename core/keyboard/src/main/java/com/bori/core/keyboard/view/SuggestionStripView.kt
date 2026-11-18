@@ -25,6 +25,10 @@ class SuggestionStripView(context: Context) : View(context) {
         fun onBlockAnswered(word: String, block: Boolean)
         fun onClipboardButton()
         fun onClipChipPicked()
+        /** Hold ⚙: one-handed mode on/off (Stage 4). */
+        fun onSettingsLongPressed() {}
+        /** 🎤: hand over to voice typing (Stage 4). */
+        fun onVoiceButton() {}
     }
 
     /** One slot. [quoted] marks the user's literal typing when it would be corrected. */
@@ -57,13 +61,31 @@ class SuggestionStripView(context: Context) : View(context) {
     private val density = resources.displayMetrics.density
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
     private val dividerPaint = Paint()
+    private val backgroundPaint = Paint()
+    /** False while an ambient effect runs behind us: InputRootView paints the background. */
+    var paintBackground = true
     private val pressPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val handler = Handler(Looper.getMainLooper())
     private val settingsWidth get() = 48 * density
     private val clipWidth get() = 48 * density
 
+    /** Show 🎤 left of 📋 (the service hides it in password and no-mic fields). */
+    var showMic = false
+        set(v) {
+            if (field != v) {
+                field = v
+                invalidate()
+            }
+        }
+    private val micWidth get() = if (showMic && prompt == null && !clipboardOpen) 44 * density else 0f
+
     private var downSlot = NONE
     private var longPressed = false
+    private val settingsLongPress = Runnable {
+        longPressed = true
+        listener?.onSettingsLongPressed()
+    }
+
     private val longPress = Runnable {
         val slot = downSlot
         if (slot >= 0 && items.getOrNull(slot) != null) {
@@ -109,20 +131,28 @@ class SuggestionStripView(context: Context) : View(context) {
         }
     }
 
-    private fun slotWidth() = (width - settingsWidth - clipWidth) / 3f
+    private fun slotWidth() = (width - settingsWidth - clipWidth - micWidth) / 3f
     private fun slotAt(x: Float): Int = when {
         x < settingsWidth -> SETTINGS
         x >= width - clipWidth -> CLIPBOARD
+        x >= width - clipWidth - micWidth -> MIC
         else -> ((x - settingsWidth) / slotWidth()).toInt().coerceIn(0, 2)
     }
 
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(theme.background)
+        // Only our own rectangle: drawColor fills the whole clip, and InputRootView turns
+        // child clipping off (for press effects), so it would paint over the suggestion bar.
+        val bg = theme.solidBackground
+        if (paintBackground && android.graphics.Color.alpha(bg) != 0) {
+            backgroundPaint.color = bg
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), backgroundPaint)
+        }
         textPaint.color = theme.stripText
         textPaint.typeface = Typeface.DEFAULT
         textPaint.textSize = height * 0.42f
         drawText(canvas, if (incognito) "🕶" else "⚙", settingsWidth / 2, settingsWidth)
         drawText(canvas, if (clipboardOpen) "⌨" else "📋", width - clipWidth / 2, clipWidth)
+        if (micWidth > 0f) drawText(canvas, "🎤", width - clipWidth - micWidth / 2, micWidth)
 
         prompt?.let { p ->
             val w = width - settingsWidth - clipWidth
@@ -142,7 +172,7 @@ class SuggestionStripView(context: Context) : View(context) {
         clip?.let { c ->
             // One wide pill across the slots: "📋 copied text".
             val left = settingsWidth + 4 * density
-            val right = width - clipWidth - 4 * density
+            val right = width - clipWidth - micWidth - 4 * density
             pressPaint.color = if (downSlot >= 0) theme.keyPressed else theme.keyFunction
             canvas.drawRoundRect(left, 6 * density, right, height - 6 * density, height / 2f, height / 2f, pressPaint)
             textPaint.color = theme.stripText
@@ -192,15 +222,20 @@ class SuggestionStripView(context: Context) : View(context) {
                 longPressed = false
                 downSlot = if (prompt == null) slotAt(e.x).takeIf { it >= 0 } ?: NONE else NONE
                 if (downSlot >= 0 && clip == null && !clipboardOpen) handler.postDelayed(longPress, LONG_PRESS_MS)
+                if (prompt == null && e.x < settingsWidth) handler.postDelayed(settingsLongPress, LONG_PRESS_MS)
                 invalidate()
             }
-            MotionEvent.ACTION_MOVE -> if (downSlot >= 0 && slotAt(e.x) != downSlot) cancelPress()
+            MotionEvent.ACTION_MOVE -> {
+                if (downSlot >= 0 && slotAt(e.x) != downSlot) cancelPress()
+                if (e.x >= settingsWidth) handler.removeCallbacks(settingsLongPress)
+            }
             MotionEvent.ACTION_UP -> {
                 val slot = downSlot
                 cancelPress()
                 val p = prompt
                 when {
                     e.x >= width - clipWidth -> listener?.onClipboardButton()
+                    p == null && micWidth > 0f && e.x >= width - clipWidth - micWidth -> listener?.onVoiceButton()
                     p != null -> {
                         val rel = (e.x - settingsWidth) / (width - settingsWidth - clipWidth)
                         if (rel >= 0.7f) {
@@ -209,7 +244,7 @@ class SuggestionStripView(context: Context) : View(context) {
                             invalidate()
                         }
                     }
-                    e.x < settingsWidth -> listener?.onOpenSettings()
+                    e.x < settingsWidth -> if (!longPressed) listener?.onOpenSettings()
                     clipboardOpen -> Unit
                     clip != null -> listener?.onClipChipPicked()
                     slot >= 0 && !longPressed && items.getOrNull(slot) != null -> listener?.onSuggestionPicked(slot)
@@ -222,6 +257,7 @@ class SuggestionStripView(context: Context) : View(context) {
 
     private fun cancelPress() {
         handler.removeCallbacks(longPress)
+        handler.removeCallbacks(settingsLongPress)
         downSlot = NONE
         invalidate()
     }
@@ -230,6 +266,7 @@ class SuggestionStripView(context: Context) : View(context) {
         const val NONE = -1
         const val SETTINGS = -2
         const val CLIPBOARD = -3
+        const val MIC = -4
         const val LONG_PRESS_MS = 450L
     }
 }

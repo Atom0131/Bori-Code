@@ -14,4 +14,8 @@ interface InputHost {
     fun sendKeyChar(c: Char)
     fun toggleClipboard()
     fun openSettings()
+    /** Bori Keyboard's one-handed mode; the terminal has none. */
+    fun toggleOneHanded() {}
+    /** Bori Keyboard's 🎤; the terminal has none (the strip's mic stays hidden). */
+    fun startVoice() {}
 }
