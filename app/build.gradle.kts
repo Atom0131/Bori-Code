@@ -30,8 +30,8 @@ android {
         applicationId = "com.bori.code"
         minSdk = 26
         targetSdk = 37
-        versionCode = 18
-        versionName = "4.6.0"
+        versionCode = 19
+        versionName = "4.6.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

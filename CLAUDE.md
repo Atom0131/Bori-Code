@@ -15,7 +15,7 @@ on-device Gemma 4 E2B/E4B via LiteRT-LM).
   new app on devices and on Play). Data: `bori.db`, `bori_keyvault`, projects in `files/Bori`. Backups
   have the `BCBK` header; the old `MMBK` (Mimir) ones still import. The keystore alias inside
   `bori-code-release.jks` is still `mimir`. That's only a name in the key file.
-- versionName `4.5.2`, versionCode `15`
+- versionName `4.6.1`, versionCode `19`
 - minSdk 26, targetSdk 37, compileSdk 37 (Android 8.0 → 17), JVM target 11. Targeting 37 means: ACCESS_LOCAL_NETWORK for LAN/Tailscale (`ui/common/LocalNetworkAccess.kt`), predictive back (no onBackPressed), no orientation locks on large screens
 - ~160 Kotlin files across 6 Gradle modules. UI is 100% Jetpack Compose. DI is Hilt.
 

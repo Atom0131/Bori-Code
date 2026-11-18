@@ -20,6 +20,8 @@ runs locally, and an AI agent can scaffold and modify your project for you.
 |---|---|
 | ![Chat beside the Linux terminal](docs/screenshots/unfolded-chat-terminal.png) | ![Claude Code with the split keyboard](docs/screenshots/claude-code-split-keys.png) |
 | ![Chat beside the code editor](docs/screenshots/unfolded-chat-editor.png) | ![An on-device build](docs/screenshots/build-success.png) |
+| ![Bori Keyboard in the terminal, fixing typos as you type](docs/screenshots/terminal-keyboard-autocorrect.png) | ![Settings: Device & heat](docs/screenshots/device-heat-settings.png) |
+| ![Settings in the Crystal look](docs/screenshots/settings-crystal.png) | |
 
 | | | | |
 |---|---|---|---|
